@@ -46,7 +46,8 @@ const PORT = process.env.PORT || 4747;
 // Which service does each job (lessons, utility, voice, listening): data/config.json, or .env defaults.
 const backends = loadBackends({
   dataDir: path.resolve(ROOT, process.env.DATA_DIR || 'data'), env: process.env, opRead,
-  defaults: { 'claude-cli': { cwd: SESSIONS }, 'openai-chat': { convoDir: path.resolve(ROOT, process.env.DATA_DIR || 'data', 'convos') } },
+  defaults: (convoDir => ({ 'claude-cli': { cwd: SESSIONS }, 'openai-chat': { convoDir }, 'anthropic-messages': { convoDir } }))(
+    path.resolve(ROOT, process.env.DATA_DIR || 'data', 'convos')),
 });
 
 const accounts = createAccounts(DATA);

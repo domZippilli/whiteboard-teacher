@@ -36,11 +36,17 @@ See `PLAN.md` for status, decisions and roadmap.
   `.env` when there is none (claude-cli + ElevenLabs, the original setup).
 - Interfaces: text `start/continue/fork/once` (returns `{ convo, text }`), voice `voices()/speak()`
   (returns `{ audio, mime, ext, timing? }`), listening `transcribe()`. Types: text `claude-cli`,
-  `openai-chat`; voice `elevenlabs`, `browser-model`; listening `elevenlabs-stt`, `browser-transcribe`.
+  `anthropic-messages`, `openai-chat`; voice `elevenlabs`, `openai-speech`, `browser-model`; listening
+  `elevenlabs-stt`, `openai-transcribe`, `browser-transcribe`.
   No backend for a job → 503 "the teacher isn't available".
 - `openai-chat` (llama.cpp, vLLM, Ollama, …): JSON mode via `response_format`, Qwen-style thinking toggle
   (`chat_template_kwargs.enable_thinking`), `<think>` stripped. No server-side conversations, so
-  messages are stored in `data/convos/<id>.json` (`convo` = `oc:<id>`).
+  messages are stored in `data/convos/<id>.json` (`convo` = `oc:<id>`; `backends/text/convos.js`).
+- `anthropic-messages`: Anthropic API key (or a compatible server); same stored conversations
+  (`am:<id>`); the system prompt is marked for prompt caching; 429/529 retried twice.
+- `openai-speech` (Kokoro-FastAPI, Speaches, OpenAI…): WAV out, duration read from the header (no
+  timings, cues stripped); voices listed from `/audio/voices` when the server has it.
+  `openai-transcribe` (Speaches, whisper.cpp, OpenAI…): multipart upload, `language` default `en`.
 - `askJson()` tries `lessons` backends in order; a lesson's conversation belongs to `lesson.convoBackend`;
   another backend taking over starts afresh seeded with the outline + parts so far (`lessonSoFar`).
   `utilityOnce()` does the same fallback for screening/profiles. Never commit lab hostnames/model

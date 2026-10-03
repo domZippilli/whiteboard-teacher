@@ -1,6 +1,6 @@
 # Plan: configurable backends
 
-Status: in progress (2026-10-03). Steps 1–4 done; step 5 `openai-chat` done.
+Status: in progress (2026-10-03). Steps 1–6 done.
 
 ## Goal
 Let the admin choose, for the whole server, which service does each job: writing lessons, screening
@@ -134,8 +134,9 @@ backends unless testing shows a need for more.
 3. ✅ **`browser-model` voice with Kokoro**: worker, model download, settings, fallback rules.
 4. ✅ **Admin › Backends**: add/edit backends, order per job, secrets, Test, health.
 5. ✅ **`openai-chat`** (done; tested with a Qwen 27B on llama.cpp: outline+screening 9 s, a part 17 s,
-   quiz 7 s, refusal 3 s) and **`anthropic-messages`** (not yet) text backends (for the lab model), conversation storage.
-6. **`openai-speech`** voice (Kokoro-FastAPI etc.) and **`openai-transcribe`** listening.
+   quiz 7 s, refusal 3 s) and ✅ **`anthropic-messages`** (tested against a stand-in server; no real key yet) text backends (for the lab model), conversation storage.
+6. ✅ **`openai-speech`** voice (Kokoro-FastAPI etc.) and **`openai-transcribe`** listening (tested against a
+   stand-in server). Later: Kokoro-FastAPI's captioned speech (word timestamps) for drawing sync.
 7. **`browser-recognition`** listening (optional).
 
 ## Decisions
