@@ -42,6 +42,7 @@ function opRead(ref) {
 
 
 const PORT = process.env.PORT || 4747;
+const HOST = process.env.HOST; // e.g. 127.0.0.1 behind tailscale serve; default: all interfaces
 
 // Which service does each job (lessons, utility, voice, listening): data/config.json, or .env defaults.
 const backends = loadBackends({
@@ -749,7 +750,7 @@ Return: {"steps":[...]}`,
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml',
-  '.json': 'application/json', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.md': 'text/markdown; charset=utf-8', '.png': 'image/png',
+  '.json': 'application/json', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.md': 'text/markdown; charset=utf-8', '.png': 'image/png', '.webmanifest': 'application/manifest+json',
 };
 
 function sendFile(res, file) {
@@ -838,7 +839,7 @@ http.createServer(async (req, res) => {
   const file = path.normalize(path.join(PUBLIC, decodeURIComponent(url.pathname)));
   if (!file.startsWith(PUBLIC)) { res.writeHead(403); return res.end(); }
   fs.stat(file, (err, st) => sendFile(res, !err && st.isFile() ? file : path.join(PUBLIC, 'index.html')));
-}).listen(PORT, () => {
-  console.log(`Whiteboard Teacher on http://localhost:${PORT}`);
+}).listen(PORT, HOST, () => {
+  console.log(`Whiteboard Teacher on http://${HOST || 'localhost'}:${PORT}`);
   console.log(`  ${backends.describe()}`);
 });
