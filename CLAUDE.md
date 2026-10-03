@@ -41,6 +41,12 @@ See `PLAN.md` for status, decisions and roadmap.
   Admin › Voices; without an entry a backend offers its configured voices. Learners pick from
   `GET voices`; a choice is `"backendId:voiceId"` (older settings: bare id). `resolveVoice()` falls
   back to the first backend's default; admins may preview voices that aren't enabled.
+- Voice fallback: `POST tts` tries the learner's voice, then each other voice backend's default; cached
+  audio first. Failures mark a backend unhealthy (1 h quota/auth, 10 min otherwise; `markFailed`).
+- `browser-model` (Kokoro via kokoro-js) runs in the learner's browser: the server answers
+  `{ browser: spec }` and `public/voice-worker.js` makes WAV audio (no timings; cues stripped). Static
+  responses carry COOP/COEP (credentialless) so WASM can use threads (~2× faster). In the default
+  `.env` setup Kokoro follows ElevenLabs in the voice job.
 - Lessons store their conversation handle as `convo` (older lessons: `session`, a claude-cli id).
 
 ## How lessons are written

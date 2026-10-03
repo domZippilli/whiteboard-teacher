@@ -646,29 +646,44 @@ Return: {"steps":[...]}`,
     return backends.setVoiceCatalog(backend, { enabled, default: def });
   },
 
-  // Speech for one step, with timings when the backend gives them. Cached on disk by (backend,
-  // model, voice, text), inside the lesson folder when there is one, so replays are free.
+  // Speech for one step. Tries the learner's voice, then each other voice backend's default, in
+  // order: cached audio first (free, works even if that backend is down), then generating it.
+  // Server backends return { url, ...timing }; browser backends return { browser: spec } and the
+  // client makes the audio itself.
   async 'POST tts'({ text, voice, id }, _, ctx) {
     if (id) await ownLesson(ctx, id);
-    backendFor('voice');
-    const { backend: b, voice: v } = backends.resolveVoice(voice, { any: ctx.admin });
-    voice = v;
-    // The original cache key had no backend id; keep it for ElevenLabs so existing audio stays valid.
-    const keyParts = b.type === 'elevenlabs' ? [voice, b.model, text] : [b.id, b.model, voice, text];
-    const hash = crypto.createHash('sha1').update(keyParts.join('|')).digest('hex').slice(0, 16);
+    const chosen = backends.resolveVoice(voice, { any: ctx.admin });
+    if (!chosen) throw httpError(503, "The teacher's voice isn't available right now.");
+    const candidates = [chosen, ...backends.jobs.voice.filter(b => b !== chosen.backend)
+      .map(b => ({ backend: b, voice: backends.defaultVoiceOf(b) }))];
     const dir = id ? path.join(lessonDir(id), 'audio') : path.join(LESSONS, '_cache');
-    const base = path.join(dir, hash);
-    try {
-      const meta = JSON.parse(await fsp.readFile(base + '.json', 'utf8'));
-      const ext = meta.ext || 'mp3';
-      return { url: '/' + path.relative(ROOT, `${base}.${ext}`).split(path.sep).join('/'), ...meta };
-    } catch {}
-    const { audio, ext, timing } = await b.speak({ text, voice });
-    const meta = { ...(timing || {}), ...(ext !== 'mp3' ? { ext } : {}) };
-    await fsp.mkdir(dir, { recursive: true });
-    await fsp.writeFile(`${base}.${ext}`, audio);
-    await fsp.writeFile(base + '.json', JSON.stringify(meta));
-    return { url: '/' + path.relative(ROOT, `${base}.${ext}`).split(path.sep).join('/'), ...meta };
+    for (const c of candidates) {
+      const { backend: b, voice: v } = c;
+      if (b.capabilities.runsIn === 'browser') {
+        if (!backends.healthy(b)) continue;
+        return { browser: { backend: b.id, ...b.clientSpec(v) } };
+      }
+      // The original cache key had no backend id; keep it for ElevenLabs so existing audio stays valid.
+      const keyParts = b.type === 'elevenlabs' ? [v, b.model, text] : [b.id, b.model, v, text];
+      const base = path.join(dir, crypto.createHash('sha1').update(keyParts.join('|')).digest('hex').slice(0, 16));
+      const urlFor = ext => '/' + path.relative(ROOT, `${base}.${ext}`).split(path.sep).join('/');
+      try {
+        const meta = JSON.parse(await fsp.readFile(base + '.json', 'utf8'));
+        return { url: urlFor(meta.ext || 'mp3'), ...meta };
+      } catch {}
+      if (!backends.healthy(b)) continue;
+      try {
+        const { audio, ext, timing } = await b.speak({ text, voice: v });
+        const meta = { ...(timing || {}), ...(ext !== 'mp3' ? { ext } : {}) };
+        await fsp.mkdir(dir, { recursive: true });
+        await fsp.writeFile(`${base}.${ext}`, audio);
+        await fsp.writeFile(base + '.json', JSON.stringify(meta));
+        return { url: urlFor(ext), ...meta };
+      } catch (e) {
+        backends.markFailed(b, e);
+      }
+    }
+    throw httpError(503, "The teacher's voice isn't available right now.");
   },
 };
 
@@ -683,7 +698,12 @@ function sendFile(res, file) {
   fs.readFile(file, (err, data) => {
     if (err) { res.writeHead(404); return res.end('Not found'); }
     // no-cache: always revalidate, so edits to the app show up on a normal reload.
-    res.writeHead(200, { 'content-type': MIME[path.extname(file)] || 'application/octet-stream', 'cache-control': 'no-cache' });
+    // Cross-origin isolation lets in-browser voices use multi-threaded WebAssembly (much faster).
+    // "credentialless" still allows the CDN scripts and fonts.
+    res.writeHead(200, {
+      'content-type': MIME[path.extname(file)] || 'application/octet-stream', 'cache-control': 'no-cache',
+      'cross-origin-opener-policy': 'same-origin', 'cross-origin-embedder-policy': 'credentialless',
+    });
     res.end(data);
   });
 }

@@ -1,6 +1,6 @@
 # Plan: configurable backends
 
-Status: in progress (2026-10-03). Steps 1–2 done.
+Status: in progress (2026-10-03). Steps 1–3 done.
 
 ## Goal
 Let the admin choose, for the whole server, which service does each job: writing lessons, screening
@@ -108,7 +108,8 @@ Capabilities differ, so each type declares them: `timings` (word/char timings fo
   with server voices today.
 - No server cost and no server cache (audio is made on each device each time). Kokoro has no
   timings, so drawings use the estimate.
-- Unknown: speed on the Android tablet. If too slow there, the admin can put an `openai-speech`
+- Measured on a Mac (headless Chrome, WASM q8): 7.2 s of speech in 5.0 s with threads (cross-origin
+  isolation), 9.8 s without. Unknown: speed on the Android tablet. If too slow there, the admin can put an `openai-speech`
   Kokoro server (Kokoro-FastAPI) ahead of it in the list.
 
 ### Configuration
@@ -129,7 +130,7 @@ backends unless testing shows a need for more.
 1. ✅ **Refactor** today's code behind the interfaces (`claude-cli`, `elevenlabs`, `elevenlabs-stt`,
    `browser-speech`), config loader with `.env` defaults. No behaviour change.
 2. ✅ **Voice catalog and learner choice**: admin enables/names voices per backend; learners pick.
-3. **`browser-model` voice with Kokoro**: worker, model download, settings, fallback rules.
+3. ✅ **`browser-model` voice with Kokoro**: worker, model download, settings, fallback rules.
 4. **Admin › Backends**: add/edit backends, order per job, secrets, Test, health.
 5. **`openai-chat` and `anthropic-messages`** text backends (for the lab model), conversation storage.
 6. **`openai-speech`** voice (Kokoro-FastAPI etc.) and **`openai-transcribe`** listening.

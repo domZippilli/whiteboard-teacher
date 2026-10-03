@@ -54,17 +54,59 @@ function levelAudio(audio) {
   } catch (e) { console.warn('audio leveling unavailable', e); }
 }
 
+// Speech for some text: { url, duration, starts? } from the server, or made in this browser when the
+// server says the voice runs here ({ browser: spec }). null → the device's own voice (Web Speech).
 const ttsCache = new Map();
-function speech(text, lessonId) {
+function speech(text, lessonId, voice = settings.voice) {
   if (!text?.trim()) return Promise.resolve(null);
-  const key = `${settings.voice}|${text}`;
+  const key = `${voice}|${text}`;
   if (!ttsCache.has(key)) {
-    const p = config.tts
-      ? api('tts', { text, voice: settings.voice || undefined, id: lessonId }).catch(e => { console.warn(e); return null; })
-      : Promise.resolve(null);
+    const p = !config.tts ? Promise.resolve(null)
+      : api('tts', { text, voice: voice || undefined, id: lessonId })
+        .then(r => (r.browser ? browserSpeech(stripCues(text), r.browser) : r))
+        .catch(e => { console.warn(e); return null; });
     ttsCache.set(key, p);
   }
   return ttsCache.get(key);
+}
+
+// ---------- in-browser voices (voice-worker.js) ----------
+// The first use downloads the model (~90 MB, then cached by the browser): show progress meanwhile.
+let voiceWorker = null;
+let voiceBroken = false;
+const voiceJobs = new Map();
+function browserSpeech(text, spec) {
+  if (voiceBroken) return Promise.resolve(null);
+  if (!voiceWorker) {
+    voiceWorker = new Worker('/voice-worker.js', { type: 'module' });
+    voiceWorker.onmessage = ({ data }) => {
+      if (data.type === 'progress') return voiceProgress(data.loaded / data.total);
+      if (data.type === 'ready') return voiceProgress(null);
+      const job = voiceJobs.get(data.id);
+      if (!job) return;
+      voiceJobs.delete(data.id);
+      if (data.type === 'audio') {
+        job.resolve({ url: URL.createObjectURL(new Blob([data.wav], { type: 'audio/wav' })), duration: data.duration, local: true });
+      } else {
+        console.warn('in-browser voice failed:', data.message);
+        voiceProgress(null);
+        // If the model can't run on this device, stop trying and use the device's voice instead.
+        if (/load|fetch|backend|webgpu|wasm|import/i.test(data.message)) voiceBroken = true;
+        job.resolve(null);
+      }
+    };
+    voiceWorker.onerror = e => { console.warn('voice worker', e.message); voiceBroken = true; voiceProgress(null); };
+  }
+  const id = crypto.randomUUID();
+  return new Promise(resolve => {
+    voiceJobs.set(id, { resolve });
+    voiceWorker.postMessage({ type: 'speak', id, spec, text });
+  });
+}
+function voiceProgress(frac) {
+  const el = $('#voiceLoading');
+  el.classList.toggle('hidden', frac === null);
+  if (frac !== null) el.textContent = `Getting the voice ready… ${Math.round(frac * 100)}%`;
 }
 
 // [audio tags] are delivery cues for the voice model, never shown or spoken by the browser voice.
@@ -94,7 +136,13 @@ const LINES = {
   ],
 };
 const lineAudio = new Audio();
-function warmLines() { if (config.tts) Object.values(LINES).flat().forEach(t => speech(t)); }
+// Pre-make the teacher's little lines. For an in-browser voice, just the first (which also loads the
+// model in the background); the rest are made when needed.
+async function warmLines() {
+  if (!config.tts) return;
+  const first = await speech(LINES.hmm[0]);
+  if (first && !first.local) Object.values(LINES).flat().forEach(t => speech(t));
+}
 async function sayLine(kind) {
   const list = LINES[kind];
   const text = list[Math.floor(Math.random() * list.length)];
@@ -388,7 +436,8 @@ class Player {
     caption(stripCues(say));
     const tts = await speech(say, this.lesson.id);
     if (!alive()) return;
-    const duration = say ? (tts?.duration || estimate(say) / settings.rate) : 0;
+    // Audio plays at settings.rate, so its real length is duration / rate.
+    const duration = say ? (tts?.duration || estimate(say)) / settings.rate : 0;
     const timeAt = phrase => {
       const i = say.toLowerCase().indexOf(String(phrase).toLowerCase());
       if (i < 0) return null;
@@ -555,7 +604,7 @@ class Player {
 }
 
 const player = new Player();
-window.wt = { player }; // for debugging from the console
+window.wt = { player, speech }; // for debugging from the console
 
 // ---------- UI ----------
 
@@ -1163,8 +1212,8 @@ function wire() {
     const name = $('#sName').value.trim() || 'Claude';
     const text = `Hi, I'm ${name}. Let's learn something.`;
     if (config.tts) {
-      const r = await api('tts', { text, voice: sel.value }).catch(() => null);
-      if (r) { const a = new Audio(r.url); a.playbackRate = +$('#sRate').value; a.play(); }
+      const r = await speech(text, null, sel.value);
+      if (r?.url) { const a = new Audio(r.url); a.playbackRate = +$('#sRate').value; a.play(); }
     } else {
       const u = new SpeechSynthesisUtterance(text);
       u.voice = speechSynthesis.getVoices().find(v => v.name === sel.value) || null;
@@ -1237,7 +1286,7 @@ const account = createAccountUI({
   api, show, onSignedIn: signedIn,
   // Admin voice catalog: play a sample of any voice, named as it would introduce itself.
   onPreviewVoice: async (voice, name) => {
-    const r = await api('tts', { text: `Hi, I'm ${name}. Let's learn something.`, voice }).catch(() => null);
+    const r = await speech(`Hi, I'm ${name}. Let's learn something.`, null, voice);
     if (r?.url) { const a = new Audio(r.url); a.play(); }
   },
   onShowLessons: u => account.renderHistory(u, {

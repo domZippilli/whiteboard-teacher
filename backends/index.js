@@ -13,8 +13,9 @@ import path from 'node:path';
 import * as claudeCli from './text/claude-cli.js';
 import * as elevenlabs from './voice/elevenlabs.js';
 import * as elevenlabsStt from './listening/elevenlabs-stt.js';
+import * as browserModel from './voice/browser-model.js';
 
-const TYPES = Object.fromEntries([claudeCli, elevenlabs, elevenlabsStt].map(m => [m.type, m]));
+const TYPES = Object.fromEntries([claudeCli, elevenlabs, elevenlabsStt, browserModel].map(m => [m.type, m]));
 export const JOBS = ['lessons', 'utility', 'voice', 'listening'];
 
 // ElevenLabs voices offered by default, by first name (shared-library voices).
@@ -38,11 +39,13 @@ function envConfig(env, secret) {
         },
         'elevenlabs-stt': { type: 'elevenlabs-stt', apiKey: key, model: env.ELEVENLABS_STT_MODEL || 'scribe_v2' },
       } : {}),
+      // Free voice that runs in the learner's browser: the fallback when ElevenLabs can't speak.
+      kokoro: { type: 'browser-model', engine: 'kokoro' },
     },
     jobs: {
       lessons: ['claude'],
       utility: ['claude-utility'],
-      voice: key ? ['elevenlabs'] : [],
+      voice: key ? ['elevenlabs', 'kokoro'] : ['kokoro'],
       listening: key ? ['elevenlabs-stt'] : [],
     },
   };
@@ -74,9 +77,23 @@ export function loadBackends({ dataDir, env, secret, opRead, defaults }) {
   try { catalog = JSON.parse(fs.readFileSync(catalogFile, 'utf8')); } catch {}
   const catalogFor = b => catalog[b.id] || { enabled: b.voices().map(v => ({ id: v.id, name: v.name })), default: b.defaultVoice };
 
+  // ----- health -----
+  // A backend that fails is skipped for a while: an hour for quota/auth problems (e.g. out of
+  // credits), 10 minutes for anything else (unreachable, timeouts, server errors).
+  const health = new Map(); // id → { until, error }
+  const healthy = b => (health.get(b.id)?.until || 0) < Date.now();
+  function markFailed(b, err) {
+    const quota = [401, 402, 403].includes(err.status) || /quota|credit|limit|payment|unauthori[sz]ed/i.test(err.message);
+    health.set(b.id, { until: Date.now() + (quota ? 3600e3 : 600e3), error: err.message, at: new Date().toISOString() });
+    console.warn(`backend ${b.id} unavailable for ${quota ? '1 h' : '10 min'}: ${err.message}`);
+  }
+
   return {
     jobs,
-    first: job => jobs[job][0] || null,
+    first: job => jobs[job].find(healthy) || null,
+    healthy,
+    markFailed,
+    health: () => Object.fromEntries(health),
 
     // Voices learners can choose, across all voice backends in order.
     voiceList: () => jobs.voice.flatMap(b => {
@@ -85,7 +102,7 @@ export function loadBackends({ dataDir, env, secret, opRead, defaults }) {
     }),
     // The default voice: the first backend's default.
     defaultVoice() {
-      const b = jobs.voice[0];
+      const b = jobs.voice.find(healthy) || jobs.voice[0];
       return b ? `${b.id}:${catalogFor(b).default || catalogFor(b).enabled[0]?.id}` : null;
     },
     // Turn a learner's choice into { backend, voice }. Older settings hold a bare voice id. Falls back
@@ -100,6 +117,8 @@ export function loadBackends({ dataDir, env, secret, opRead, defaults }) {
       const b = jobs.voice[0];
       return b ? { backend: b, voice: catalogFor(b).default || catalogFor(b).enabled[0]?.id } : null;
     },
+    // A backend's own default voice (from the catalog).
+    defaultVoiceOf: b => catalogFor(b).default || catalogFor(b).enabled[0]?.id,
     // Admin: everything each voice backend offers, with what's enabled.
     async voiceCatalog() {
       return Promise.all(jobs.voice.map(async b => {

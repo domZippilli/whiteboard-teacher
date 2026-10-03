@@ -265,3 +265,6 @@ button.danger { color: #d23a2f !important; margin-left: auto; }
 .add-voice input { flex: 1; min-width: 0; }
 .add-voice button { border-radius: 999px; padding: 6px 14px; }
 @media (max-width: 640px) { .voice-row { grid-template-columns: auto 1fr auto auto; } .voice-row .desc { display: none; } }
+
+.voice-loading { position: fixed; left: 16px; bottom: 16px; z-index: 20; background: var(--card); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 999px; padding: 8px 16px; font-size: 14px; box-shadow: 0 4px 18px rgba(0,0,0,.12); }
