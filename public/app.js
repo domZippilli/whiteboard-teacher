@@ -33,7 +33,7 @@ let config = { tts: false };
 function applyName() {
   $('#teacherName').textContent = settings.teacher;
   document.title = `Ask ${settings.teacher}`;
-  $('#q').placeholder = `What would you like ${settings.teacher} to teach you? (hold A to talk)`;
+  $('#q').placeholder = `What would you like ${settings.teacher} to teach you?${config.listening ? ' (hold A to talk)' : ''}`;
 }
 
 // ---------- speech ----------
@@ -710,7 +710,7 @@ function showEndQuestions(again) {
   box.classList.remove('hidden');
   $('#endTitle').textContent = again ? 'Any other questions?' : 'Any questions?';
   $('#endInput').value = '';
-  $('#endInput').placeholder = 'Type, or hold A to talk';
+  $('#endInput').placeholder = askHint();
   // Not focused on purpose: focusing would count as "interacting" and stop the countdown.
   $('#endInput').blur();
   startCountdown();
@@ -1045,7 +1045,7 @@ function wire() {
     if (player.playing && !player.paused) player.togglePause();
     $('#handBox').classList.remove('hidden');
     $('#handQ').value = '';
-    $('#handQ').placeholder = 'Type, or hold A to talk';
+    $('#handQ').placeholder = askHint();
     $('#handQ').focus();
     if (listen) toggleMic();
   };
@@ -1121,7 +1121,7 @@ function wire() {
     else if (e.key === 'ArrowRight') player.next();
     else if (e.key === 'ArrowLeft') player.prev();
     else if (e.key === '?' || e.key === 'h') { e.preventDefault(); openHand(); }
-    else if (e.key === 'm') { e.preventDefault(); openHand(true); }
+    else if (e.key === 'm') { e.preventDefault(); openHand(config.listening); }
     else if (e.key === 'c') $('#ccBtn').click();
     else if (e.key === 'Escape') closeHand();
   });
@@ -1140,6 +1140,11 @@ function wire() {
     return null;
   };
   const beginPTT = ctx => {
+    // No listening backend: holding A just opens the question box.
+    if (!config.listening) {
+      if (ctx === 'lesson') openHand(); else if (ctx === 'home') $('#q').focus(); else $('#endInput').focus();
+      return;
+    }
     const ask = (btn, input, form) => startRecording({ btn: $(btn), input: $(input), autoStop: false }, text => {
       $(input).value = text;
       $(form).requestSubmit();
@@ -1274,10 +1279,17 @@ function route() {
   renderLibrary();
 }
 
+// Mic buttons only when a listening backend is set up.
+const askHint = () => (config.listening ? 'Type, or hold A to talk' : 'Type your question');
+function applyListening() {
+  for (const id of ['#homeMic', '#micBtn', '#endMic']) $(id).classList.toggle('hidden', !config.listening);
+  applyName();
+}
+
 // Fresh question box on returning home (also resets any mic status left in the placeholder).
 function clearAsk() {
   $('#q').value = '';
-  $('#q').placeholder = `What would you like ${settings.teacher} to teach you? (hold A to talk)`;
+  $('#q').placeholder = `What would you like ${settings.teacher} to teach you?${config.listening ? ' (hold A to talk)' : ''}`;
 }
 
 // ---------- accounts ----------
@@ -1310,6 +1322,7 @@ async function signedIn() {
   $('#lengths').querySelectorAll('button').forEach(b => b.classList.toggle('on', +b.dataset.min === +settings.minutes));
   $('#ccBtn').classList.toggle('on', !!settings.captions);
   try { config = await api('config'); } catch {}
+  applyListening();
   warmLines();
   route();
 }
@@ -1326,7 +1339,13 @@ function wireAccount() {
   $('#meAdmin').onclick = async () => {
     show('admin');
     $('#adminHistory').replaceChildren();
-    try { await account.renderUsers(); await account.renderVoices(); await account.renderPolicies(); } catch { goHome(); }
+    try {
+      await account.renderUsers();
+      // Backend changes can change the voices and the mic: refresh those after saving.
+      await account.renderBackends({ onSaved: async () => { config = await api('config'); applyListening(); ttsCache.clear(); account.renderVoices(); } });
+      await account.renderVoices();
+      await account.renderPolicies();
+    } catch { goHome(); }
   };
   $('#adminBack').onclick = goHome;
 }

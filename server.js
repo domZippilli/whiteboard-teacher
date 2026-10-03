@@ -29,8 +29,8 @@ try {
   }
 } catch {}
 
-// A secret can be given directly (FOO) or as a 1Password reference (FOO_OP_REF = op://vault/item/field),
-// resolved once at startup with the `op` CLI (needs OP_SERVICE_ACCOUNT_TOKEN or desktop integration).
+// Secrets can be 1Password references (op://vault/item/field), read with the `op` CLI
+// (needs OP_SERVICE_ACCOUNT_TOKEN or desktop integration).
 function opRead(ref) {
   try {
     return execFileSync('op', ['read', ref], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
@@ -39,17 +39,13 @@ function opRead(ref) {
     return '';
   }
 }
-function secret(name) {
-  if (process.env[name]) return process.env[name];
-  const ref = process.env[`${name}_OP_REF`];
-  return ref ? opRead(ref) : '';
-}
+
 
 const PORT = process.env.PORT || 4747;
 
 // Which service does each job (lessons, utility, voice, listening): data/config.json, or .env defaults.
 const backends = loadBackends({
-  dataDir: path.resolve(ROOT, process.env.DATA_DIR || 'data'), env: process.env, secret, opRead,
+  dataDir: path.resolve(ROOT, process.env.DATA_DIR || 'data'), env: process.env, opRead,
   defaults: { 'claude-cli': { cwd: SESSIONS } },
 });
 // "No AI, no lecture": with no backend for a job, requests that need it fail kindly.
@@ -630,7 +626,23 @@ Return: {"steps":[...]}`,
       tts: !!v, // false → the browser's own voice
       voice: backends.defaultVoice(),
       audioTags: !!v?.capabilities.audioTags,
+      listening: !!backends.first('listening'), // false → no mic buttons
     };
+  },
+
+  // ----- admin: backends -----
+  async 'GET admin/backends'() {
+    return backends.adminView();
+  },
+
+  async 'PUT admin/backends'(body) {
+    const view = backends.update(body);
+    console.log(`backends updated:\n  ${backends.describe()}`);
+    return view;
+  },
+
+  async 'POST admin/backend-test'({ id }) {
+    return backends.test(id);
   },
 
   // Voices learners may choose (the admin's catalog), as { value, name, backend, default }.

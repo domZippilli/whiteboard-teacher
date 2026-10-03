@@ -175,6 +175,151 @@ export function createAccountUI({ api, show, onSignedIn, onShowLessons, onPrevie
     dlg.showModal();
   }
 
+  // ----- admin: backends -----
+  // Which service does each job (ordered: first working one is used), and each service's settings.
+  const JOB_INFO = {
+    lessons: ['Lessons', 'Writes lessons, answers questions, makes quizzes'],
+    utility: ['Screening & profiles', 'Checks topics against the content rules; updates learning profiles'],
+    voice: ['Voice', 'Speaks the lessons (falls back down the list)'],
+    listening: ['Listening', 'Turns spoken questions into text (none = no mic buttons)'],
+  };
+  async function renderBackends({ onSaved } = {}) {
+    const box = $('#adminBackends');
+    const view = await api('admin/backends');
+    const state = { backends: structuredClone(view.backends), jobs: structuredClone(view.jobs) };
+    const secrets = {}; // id.key → typed value (untouched secrets are kept)
+    const typeLabel = t => view.types[t]?.label || t;
+    const draw = () => {
+      box.innerHTML = `<div class="admin-head"><h2>Backends</h2></div>
+        <p class="hint">${view.fromEnv ? 'Using the settings from <code>.env</code>. Saving here switches to these settings (stored in <code>data/config.json</code>).' : 'Stored in <code>data/config.json</code>. Changes apply as soon as you save.'}</p>
+        <div class="jobs"></div>
+        <h3 class="sub">Services</h3>
+        <div class="services"></div>
+        <div class="row"><select class="new-type"><option value="">+ New service…</option>${Object.entries(view.types).map(([t, m]) => `<option value="${t}">${esc(m.label)}</option>`).join('')}</select></div>
+        <div class="row save-row"><button type="button" class="save">Save</button><span class="hint msg"></span></div>`;
+      const badge = id => {
+        const st = view.backends[id]?.status;
+        if (!view.backends[id]) return '<span class="badge new">not saved</span>';
+        return st?.ok ? '<span class="badge ok">ok</span>' : `<span class="badge bad" title="${esc(st?.error || '')}">unavailable</span>`;
+      };
+      // Jobs
+      const jobsEl = box.querySelector('.jobs');
+      for (const [job, [label, help]] of Object.entries(JOB_INFO)) {
+        const ids = state.jobs[job] || (state.jobs[job] = []);
+        const el = document.createElement('div');
+        el.className = 'job';
+        el.innerHTML = `<div class="job-head"><b>${label}</b><span class="hint">${help}</span></div><div class="chain"></div>`;
+        const chain = el.querySelector('.chain');
+        ids.forEach((id, i) => {
+          const chip = document.createElement('span');
+          chip.className = 'chip';
+          chip.innerHTML = `<span class="n">${i + 1}</span> ${esc(id)} ${badge(id)}
+            <button type="button" title="Earlier" ${i ? '' : 'disabled'}>↑</button><button type="button" title="Later" ${i < ids.length - 1 ? '' : 'disabled'}>↓</button><button type="button" title="Remove from ${label}">✕</button>`;
+          const [up, down, rm] = chip.querySelectorAll('button');
+          up.onclick = () => { [ids[i - 1], ids[i]] = [ids[i], ids[i - 1]]; draw(); };
+          down.onclick = () => { [ids[i + 1], ids[i]] = [ids[i], ids[i + 1]]; draw(); };
+          rm.onclick = () => { ids.splice(i, 1); draw(); };
+          chain.appendChild(chip);
+        });
+        const candidates = Object.entries(state.backends).filter(([id, b]) => view.types[b.type]?.kind === view.jobKinds[job] && !ids.includes(id));
+        if (candidates.length) {
+          const sel = document.createElement('select');
+          sel.innerHTML = `<option value="">+ add</option>${candidates.map(([id]) => `<option>${esc(id)}</option>`).join('')}`;
+          sel.onchange = () => { ids.push(sel.value); draw(); };
+          chain.appendChild(sel);
+        }
+        if (!ids.length) chain.insertAdjacentHTML('beforeend', `<span class="hint">${job === 'voice' ? 'none: the device’s own voice' : job === 'listening' ? 'none: no mic' : 'none'}</span>`);
+        jobsEl.appendChild(el);
+      }
+      // Services
+      const svc = box.querySelector('.services');
+      for (const [id, b] of Object.entries(state.backends)) {
+        const meta = view.types[b.type];
+        const card = document.createElement('div');
+        card.className = 'service';
+        card.innerHTML = `<div class="svc-head"><b>${esc(id)}</b> <span class="hint">${esc(typeLabel(b.type))}</span> ${badge(id)}</div>
+          <p class="hint">${esc(meta?.help || '')}</p><div class="fields"></div>
+          <div class="row"><button type="button" class="ghost test">Test</button><button type="button" class="ghost danger rm">Remove</button><span class="hint result"></span></div>`;
+        const fields = card.querySelector('.fields');
+        for (const f of meta?.fields || []) {
+          const lab = document.createElement('label');
+          lab.innerHTML = `<span>${esc(f.label)}</span>`;
+          let input;
+          if (f.kind === 'select') {
+            input = document.createElement('select');
+            input.innerHTML = f.options.map(o => `<option>${esc(o)}</option>`).join('');
+            input.value = b[f.key] ?? f.default;
+          } else {
+            input = document.createElement('input');
+            input.type = f.kind === 'number' ? 'number' : f.kind === 'secret' ? 'password' : 'text';
+            if (f.kind === 'secret') {
+              const m = b[f.key] || {};
+              input.placeholder = m.set ? `${m.hint}${m.source === 'typed' ? '' : ` (from ${m.ref})`}: leave blank to keep` : 'Key, $ENV_VAR or op://vault/item/field';
+              input.value = secrets[`${id}.${f.key}`] || '';
+              input.autocomplete = 'off';
+              input.oninput = () => { secrets[`${id}.${f.key}`] = input.value; };
+            } else {
+              input.value = b[f.key] ?? '';
+              input.placeholder = f.default ?? '';
+            }
+          }
+          if (f.kind !== 'secret') input.oninput = input.onchange = () => { b[f.key] = input.value; };
+          lab.appendChild(input);
+          if (f.hint) lab.insertAdjacentHTML('beforeend', `<small class="hint">${esc(f.hint)}</small>`);
+          fields.appendChild(lab);
+        }
+        const result = card.querySelector('.result');
+        card.querySelector('.test').onclick = async () => {
+          if (!view.backends[id]) return (result.textContent = 'Save first, then test.');
+          result.textContent = 'Testing…';
+          try {
+            const r = await api('admin/backend-test', { id });
+            if (!r.ok) return (result.textContent = `✗ ${r.error}`);
+            result.textContent = `✓ ${r.message || (r.browser ? 'Runs in the browser: playing a sample here' : 'Spoke a sample')} (${(r.ms / 1000).toFixed(1)} s)`;
+            if (r.audio) new Audio(r.audio).play();
+            if (r.browser) onPreviewVoice?.(`${id}:${r.browser.voice}`, 'your teacher');
+          } catch (err) { result.textContent = `✗ ${err.message}`; }
+        };
+        card.querySelector('.rm').onclick = () => {
+          if (!confirm(`Remove ${id}?`)) return;
+          delete state.backends[id];
+          for (const j of Object.keys(state.jobs)) state.jobs[j] = state.jobs[j].filter(x => x !== id);
+          draw();
+        };
+        svc.appendChild(card);
+      }
+      box.querySelector('.new-type').onchange = e => {
+        const t = e.target.value;
+        if (!t) return;
+        let id = t, n = 2;
+        while (state.backends[id]) id = `${t}-${n++}`;
+        id = (prompt('Name for this service (lowercase, digits, dashes):', id) || '').trim();
+        if (!id) return draw();
+        if (state.backends[id]) { alert('That name is taken'); return draw(); }
+        state.backends[id] = { type: t };
+        draw();
+      };
+      box.querySelector('.save').onclick = async () => {
+        const msg = box.querySelector('.msg');
+        const body = { jobs: state.jobs, backends: {} };
+        for (const [id, b] of Object.entries(state.backends)) {
+          const out = { type: b.type };
+          for (const f of view.types[b.type]?.fields || []) {
+            out[f.key] = f.kind === 'secret' ? (secrets[`${id}.${f.key}`] ? secrets[`${id}.${f.key}`] : { keep: true }) : b[f.key];
+          }
+          body.backends[id] = out;
+        }
+        try {
+          await api('admin/backends', body, 'PUT');
+          msg.textContent = 'Saved.';
+          onSaved?.();
+          renderBackends({ onSaved });
+        } catch (err) { msg.textContent = err.message; }
+      };
+    };
+    draw();
+  }
+
   // ----- admin: voices -----
   // For each voice backend: what it offers, which voices learners may pick, their names, the default.
   async function renderVoices() {
@@ -362,5 +507,5 @@ export function createAccountUI({ api, show, onSignedIn, onShowLessons, onPrevie
     }
   }
 
-  return { showSetup, showPicker, askAdminPassword, renderUsers, renderPolicies, renderRefusals, renderHistory, renderVoices };
+  return { showSetup, showPicker, askAdminPassword, renderUsers, renderPolicies, renderRefusals, renderHistory, renderVoices, renderBackends };
 }

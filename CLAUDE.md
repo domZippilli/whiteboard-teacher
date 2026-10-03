@@ -37,6 +37,10 @@ See `PLAN.md` for status, decisions and roadmap.
 - Interfaces: text `start/continue/fork/once` (returns `{ convo, text }`), voice `voices()/speak()`
   (returns `{ audio, mime, ext, timing? }`), listening `transcribe()`. Types today: `claude-cli`,
   `elevenlabs`, `elevenlabs-stt`. No backend for a job → 503 "the teacher isn't available".
+- Admin › Backends edits `data/config.json` (0600) live: services (each type's `meta.fields` drive
+  the form), and the ordered list per job. Secrets: typed, `$ENV_VAR` or `op://…`; stored as given
+  (references, not values) and never sent to the browser (masked). `backends.update()` rebuilds
+  without a restart; `backends.test(id)` makes a tiny real request. No `listening` backend → no mic.
 - Voice catalog: `data/voices.json` (per voice backend: enabled `{ id, name }` + default), edited in
   Admin › Voices; without an entry a backend offers its configured voices. Learners pick from
   `GET voices`; a choice is `"backendId:voiceId"` (older settings: bare id). `resolveVoice()` falls

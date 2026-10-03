@@ -3,6 +3,16 @@
 
 export const type = 'elevenlabs';
 
+export const meta = {
+  label: 'ElevenLabs', kind: 'voice',
+  help: 'Best voice quality, with delivery cues and word timings. Paid per character.',
+  fields: [
+    { key: 'apiKey', label: 'API key', kind: 'secret' },
+    { key: 'model', label: 'Model', kind: 'select', options: ['eleven_v3', 'eleven_multilingual_v2', 'eleven_flash_v2_5', 'eleven_turbo_v2_5'], default: 'eleven_v3', hint: 'Only eleven_v3 understands [audio tags]' },
+    { key: 'concurrency', label: 'Requests at once', kind: 'number', default: 2, hint: 'Your plan’s limit, minus one' },
+  ],
+};
+
 // settings: { apiKey, model, voices: [{ id, name }], defaultVoice, concurrency }
 export function create({ apiKey, model = 'eleven_v3', voices = [], defaultVoice, concurrency = 2 }) {
   // ElevenLabs plans cap concurrent requests (3 on the current plan): queue beyond `concurrency`.

@@ -4,6 +4,16 @@
 
 export const type = 'browser-model';
 
+export const meta = {
+  label: 'In-browser model (free)', kind: 'voice',
+  help: 'Runs on the learner’s device. First use downloads the model (about 90 MB with q8).',
+  fields: [
+    { key: 'engine', label: 'Engine', kind: 'select', options: ['kokoro'], default: 'kokoro' },
+    { key: 'dtype', label: 'Precision', kind: 'select', options: ['q8', 'fp16', 'fp32', 'q4'], default: 'q8', hint: 'q8 is small and fast; fp32 sounds slightly better (WebGPU always uses fp32)' },
+    { key: 'device', label: 'Runs on', kind: 'select', options: ['wasm', 'webgpu', 'auto'], default: 'wasm', hint: 'auto uses the GPU when the browser offers it' },
+  ],
+};
+
 // Kokoro's English voices (id, name, accent, quality grade from the model card).
 const KOKORO_VOICES = [
   ['af_heart', 'Heart', 'American', 'female', 'A'], ['af_bella', 'Bella', 'American', 'female', 'A-'],

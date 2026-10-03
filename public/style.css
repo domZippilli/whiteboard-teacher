@@ -268,3 +268,32 @@ button.danger { color: #d23a2f !important; margin-left: auto; }
 
 .voice-loading { position: fixed; left: 16px; bottom: 16px; z-index: 20; background: var(--card); color: var(--ink); border: 1px solid var(--line);
   border-radius: 999px; padding: 8px 16px; font-size: 14px; box-shadow: 0 4px 18px rgba(0,0,0,.12); }
+
+/* Admin: backends */
+.backends { margin-top: 36px; display: flex; flex-direction: column; gap: 10px; }
+.backends .hint { margin: 0; }
+.backends h3.sub { margin: 12px 0 0; font-size: 15px; }
+.jobs { display: flex; flex-direction: column; gap: 8px; }
+.job { background: var(--card); border-radius: 12px; padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; }
+.job-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.chain { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--line); background: var(--bg); border-radius: 999px; padding: 3px 4px 3px 10px; font-size: 14px; }
+.chip .n { color: var(--muted); font-size: 12px; }
+.chip button { border: 0; background: none; color: var(--ink); padding: 2px 5px; border-radius: 6px; }
+.chip button:disabled { opacity: .25; }
+.chip button:hover:not(:disabled) { background: var(--line); }
+.chain select, .new-type { border: 1px dashed var(--line); background: var(--card); color: var(--ink); border-radius: 999px; padding: 4px 10px; font: inherit; font-size: 14px; }
+.badge { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; }
+.badge.ok { background: color-mix(in srgb, #2e8a3e 18%, transparent); color: #2e8a3e; }
+.badge.bad { background: color-mix(in srgb, #d23a2f 15%, transparent); color: #d23a2f; }
+.badge.new { background: var(--line); color: var(--muted); }
+.services { display: flex; flex-direction: column; gap: 8px; }
+.service { background: var(--card); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.service .fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.service label { display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--muted); margin: 0; }
+.service input, .service select { font: inherit; font-size: 14px; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+.service .row button { border-radius: 999px; padding: 6px 14px; }
+.service .danger { margin-left: 0 !important; }
+.service .result { font-size: 13px; }
+.backends .save { border: 0; border-radius: 999px; padding: 8px 22px; background: var(--accent); color: white; font-weight: 600; }
+.save-row { align-items: center; }

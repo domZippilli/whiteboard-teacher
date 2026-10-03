@@ -6,6 +6,13 @@ import fs from 'node:fs';
 
 export const type = 'claude-cli';
 
+// Shown in Admin › Backends.
+export const meta = {
+  label: 'Claude Code CLI (claude -p)', kind: 'text',
+  help: 'Uses the Claude account the claude CLI is signed in with. No key needed.',
+  fields: [{ key: 'model', label: 'Model', kind: 'text', default: 'opus', hint: 'opus, sonnet, haiku, or a full model id' }],
+};
+
 // settings: { model, cwd }. cwd should be outside any repo so sessions don't load its CLAUDE.md.
 export function create({ model = 'opus', cwd }) {
   fs.mkdirSync(cwd, { recursive: true });

@@ -2,6 +2,15 @@
 
 export const type = 'elevenlabs-stt';
 
+export const meta = {
+  label: 'ElevenLabs Scribe', kind: 'listening',
+  help: 'Speech to text for spoken questions.',
+  fields: [
+    { key: 'apiKey', label: 'API key', kind: 'secret' },
+    { key: 'model', label: 'Model', kind: 'select', options: ['scribe_v2', 'scribe_v1'], default: 'scribe_v2' },
+  ],
+};
+
 // settings: { apiKey, model }
 export function create({ apiKey, model = 'scribe_v2' }) {
   return {
