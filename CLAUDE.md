@@ -21,8 +21,10 @@ See `PLAN.md` for status, decisions and roadmap.
   `lessons/_cache/` for audio outside a lesson (voice previews, "Hmm...").
 
 ## Deploy (homelab)
-- Runs as a systemd **user** service (linger on) with `HOST=127.0.0.1`, behind `tailscale serve --bg
-  --https=<port> http://127.0.0.1:<port>` (HTTPS is needed for the mic and threaded WASM). `PATH` in the
+- Runs as a systemd **user** service (linger on) with `HOST=127.0.0.1`, behind its own tailnet device: a
+  `tailscale/tailscale` container (host network, `TS_USERSPACE=true`, own `--port`, `TS_SERVE_CONFIG` proxying
+  HTTPS 443 → 127.0.0.1:4747), so it gets `https://<name>.<tailnet>.ts.net` with no port. HTTPS is needed
+  for the mic and threaded WASM. `PATH` in the
   unit must include `claude` (claude-cli backend) and node.
 - Update: `git pull` there, then `systemctl --user restart whiteboard-teacher`. Data (`data/`, `lessons/`,
   `.env`) lives only on that host; claude-cli sessions are in `~/.claude/projects/<encoded sessions dir>/`.
