@@ -16,6 +16,7 @@
       <h1 class="teacher-name"><span id="teacherName">Claude</span></h1>
       <form id="askForm" class="ask">
         <input id="q" autocomplete="off" autofocus placeholder="What would you like to learn about?">
+        <button type="button" id="homeMic" class="mic" title="Speak your question" aria-label="Record question">🎤</button>
         <button type="submit">Teach me</button>
       </form>
       <div class="options">
@@ -34,6 +35,13 @@
           <option value="university student">University</option>
           <option value="expert who wants depth and rigor">Expert</option>
         </select>
+        <select id="tone" aria-label="Teaching style">
+          <option value="">Any style</option>
+          <option value="serious">Serious</option>
+          <option value="matter">Matter of fact</option>
+          <option value="jovial">Jovial</option>
+          <option value="goofy">Goofy</option>
+        </select>
       </div>
       <section id="library" class="library"></section>
     </div>
@@ -50,8 +58,14 @@
       <svg id="board"></svg>
       <div id="prep" class="prep hidden">
         <div class="prep-card">
-          <div class="spinner"></div>
-          <div id="prepText">Preparing your lesson…</div>
+          <div class="doodle" aria-hidden="true">
+            <svg viewBox="0 0 220 80" width="220" height="80">
+              <path class="squiggle" d="M 10 50 C 30 10 50 90 70 50 S 110 10 130 50 S 170 90 190 40 S 205 30 212 44" pathLength="1"/>
+            </svg>
+            <div class="pencil">✏️</div>
+          </div>
+          <div id="quip" class="quip"></div>
+          <div id="prepText" class="prep-detail">Preparing your lesson…</div>
           <ol id="prepOutline"></ol>
         </div>
       </div>
@@ -67,10 +81,22 @@
       <div id="caption" class="caption hidden"></div>
       <div id="handBox" class="hand hidden">
         <form id="handForm">
-          <input id="handQ" autocomplete="off" placeholder="What's your question?">
+          <button type="button" id="micBtn" class="mic" title="Speak your question (m)" aria-label="Record question">🎤</button>
+          <input id="handQ" autocomplete="off" placeholder="Type or 🎤 speak your question">
           <button type="submit">Ask</button>
           <button type="button" id="handCancel" class="ghost">Never mind</button>
         </form>
+      </div>
+      <div id="endQ" class="prep hidden">
+        <div class="prep-card end-card">
+          <h2 id="endTitle">Any questions?</h2>
+          <form id="endForm" class="ask">
+            <input id="endInput" autocomplete="off" placeholder="Type or 🎤 speak your question">
+            <button type="button" id="endMic" class="mic" title="Speak your question" aria-label="Record question">🎤</button>
+            <button type="submit">Ask</button>
+          </form>
+          <button type="button" id="endNone" class="ghost none">No, I'm all good</button>
+        </div>
       </div>
       <div id="feedback" class="feedback hidden">
         <h2>How was that lesson?</h2>

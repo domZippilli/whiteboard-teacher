@@ -98,3 +98,30 @@ dialog input:not([type=range]), dialog select { display: block; width: 100%; mar
 #start { align-items: flex-end; padding-bottom: 48px; }
 #start .prep-card { background: color-mix(in srgb, var(--card) 92%, transparent); }
 .start-card button { border: 0; border-radius: 999px; padding: 10px 20px; background: var(--accent); color: white; font-weight: 600; }
+
+/* Loading doodle: a pencil scribbling a squiggle, forever. */
+.doodle { position: relative; width: 220px; height: 80px; margin: 0 auto 10px; }
+.doodle .squiggle { fill: none; stroke: var(--accent); stroke-width: 4; stroke-linecap: round;
+  stroke-dasharray: 1 1; animation: scribble 2.6s ease-in-out infinite; }
+.doodle .pencil { position: absolute; left: 0; top: 0; font-size: 28px; line-height: 1;
+  offset-path: path('M 10 50 C 30 10 50 90 70 50 S 110 10 130 50 S 170 90 190 40 S 205 30 212 44');
+  offset-rotate: 0deg; offset-anchor: 4px 26px; animation: pencil 2.6s ease-in-out infinite; }
+@keyframes scribble { 0% { stroke-dashoffset: 1; } 70% { stroke-dashoffset: 0; } 100% { stroke-dashoffset: 0; opacity: 0; } }
+@keyframes pencil { 0% { offset-distance: 0%; transform: rotate(0); } 35% { transform: rotate(-8deg); }
+  70% { offset-distance: 100%; transform: rotate(4deg); } 100% { offset-distance: 100%; transform: translateY(-6px); } }
+.quip { font-family: 'Patrick Hand', cursive; font-size: 26px; min-height: 36px; opacity: 0; transform: translateY(6px);
+  transition: opacity .25s, transform .25s; }
+.quip.in { opacity: 1; transform: none; }
+.prep-detail { font-size: 14px; color: var(--muted); margin-top: 6px; }
+
+/* Mic: pulses with your voice level while recording. */
+.ask button.mic, .hand button.mic { background: var(--bg); color: var(--ink); border: 1px solid var(--line); padding: 8px 12px; font-size: 18px;
+  position: relative; --level: 0; }
+.ask button.mic.rec, .hand button.mic.rec { background: #d23a2f; border-color: #d23a2f; box-shadow: 0 0 0 calc(4px + var(--level) * 14px) rgba(210,58,47,.25); }
+.ask button.mic.busy, .hand button.mic.busy { opacity: .6; }
+
+.end-card { width: min(620px, 92%); display: flex; flex-direction: column; gap: 14px; align-items: stretch; }
+.end-card h2 { margin: 0; font-family: 'Patrick Hand', cursive; font-weight: 400; font-size: 34px; }
+.end-card .ask { box-shadow: none; }
+.end-card .none { align-self: center; border-radius: 999px; padding: 8px 18px; }
+#endQ { align-items: flex-end; padding-bottom: 40px; }

@@ -20,6 +20,9 @@ home page / address-bar search engine.
   Voices offered are the `VOICES` list in `server.js` (first names: Justin, Alexander).
   Plan allows 3 concurrent requests; the server queues (ELEVENLABS_CONCURRENCY, default 2).
 - Local-only app. Saved lessons + audio live in `lessons/` (gitignored).
+- Spoken questions: browser MediaRecorder → `POST /api/stt` (raw audio) → ElevenLabs Scribe (`scribe_v2`).
+- Teaching style (Serious / Matter of fact / Jovial / Goofy) is `TONES` in `server.js`, stored per lesson and
+  added to the system prompt for every call in that lesson.
 - Run: `npm start` → http://localhost:4747 (`/?q=topic&min=5` starts a lesson directly).
 
 ## Core concept: the lesson script

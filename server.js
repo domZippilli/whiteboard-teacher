@@ -57,9 +57,17 @@ const SCRIPT_API = () => fs.readFileSync(path.join(ROOT, 'docs/SCRIPT_API.md'), 
 // Each lesson is one Claude Code session (named "Lesson: <title>"), so every part is written with
 // the whole lesson so far in context. Questions fork that session so asides don't interrupt it.
 
-function system(teacher) {
-  return `You are ${teacher || 'Claude'}, a brilliant, warm teacher giving a live lesson at a whiteboard. You write lessons as scripts that a program performs: your words are spoken by a text-to-speech voice and your drawing is drawn live in sync. Be the teacher you'd most want to learn from: make it vivid, visual and genuinely interesting.
+// Teaching personalities the student can pick. The material stays accurate whatever the tone.
+const TONES = {
+  serious: 'Serious: earnest, rigorous and measured, like a respected professor. Humor is rare and dry. Precision matters.',
+  matter: 'Matter of fact: clear, efficient, no-nonsense. Get straight to the point, minimal flourish, no filler, no cheerleading.',
+  jovial: 'Jovial: warm, upbeat and good-humored. Light jokes, real enthusiasm, a big smile in the voice.',
+  goofy: 'Goofy: playful and silly. Puns, absurd analogies, funny doodles on the board, comic timing (use the audio cues: [laughs], [gasps], [whispers], dramatic pauses), maybe a running gag. Still teach the material accurately and completely; the silliness is how you make it stick, not a replacement for substance.',
+};
 
+function system(teacher, tone) {
+  return `You are ${teacher || 'Claude'}, a brilliant${TONES[tone] ? '' : ', warm'} teacher giving a live lesson at a whiteboard. You write lessons as scripts that a program performs: your words are spoken by a text-to-speech voice and your drawing is drawn live in sync. Be the teacher you'd most want to learn from: make it vivid, visual and genuinely interesting.
+${TONES[tone] ? `\nYour teaching personality for this lesson, chosen by the student: ${TONES[tone]}\n` : ''}
 Here is the complete reference for the script format:
 
 ${SCRIPT_API()}
@@ -90,8 +98,8 @@ function claudeRun(args) {
 
 // Ask within a session and parse the JSON reply; on bad JSON, ask once more in the same session.
 // `session`: { id, create?, fork?, name? }. Returns { json, sessionId }.
-async function claudeJson({ teacher, model, session, prompt }) {
-  const base = ['--model', model || DEFAULT_MODEL, '--system-prompt', system(teacher)];
+async function claudeJson({ teacher, tone, model, session, prompt }) {
+  const base = ['--model', model || DEFAULT_MODEL, '--system-prompt', system(teacher, tone)];
   const first = session.create
     ? ['--session-id', session.id, ...(session.name ? ['-n', session.name] : [])]
     : ['--resume', session.id, ...(session.fork ? ['--fork-session'] : [])];
@@ -160,7 +168,7 @@ async function writeSection(id, index) {
   const s = outline.sections[index];
   const words = Math.round((minutes * WPM) / n);
   const { json: section } = await inSession(lesson.session, () => claudeJson({
-    teacher: lesson.teacher, model: lesson.model, session: { id: lesson.session },
+    teacher: lesson.teacher, tone: lesson.tone, model: lesson.model, session: { id: lesson.session },
     prompt: `Write part ${index + 1} of ${n}: "${s.title}". About ${words} spoken words.
 ${index === 0 ? 'This is the opening of the lesson; the board starts empty.' : `Part ${index} has just been performed; the board still shows whatever it left there.`}
 ${index === n - 1 ? 'This is the final part of the lesson.' : ''}
@@ -181,12 +189,12 @@ async function ttsSlot(fn) {
 }
 
 const api = {
-  async 'POST outline'({ topic, minutes = 5, level, teacher, model }) {
+  async 'POST outline'({ topic, minutes = 5, level, tone, teacher, model }) {
     const n = Math.max(1, Math.min(40, Math.round(minutes / 1.75)));
     const session = crypto.randomUUID();
     await fsp.mkdir(SESSIONS, { recursive: true });
     const { json: outline } = await inSession(session, () => claudeJson({
-      teacher, model, session: { id: session, create: true, name: `Lesson: ${topic}`.slice(0, 80) },
+      teacher, tone, model, session: { id: session, create: true, name: `Lesson: ${topic}`.slice(0, 80) },
       prompt: `A student asked: "${topic}"
 Plan a ${minutes}-minute lesson${level ? ` for a ${level} audience` : ''}, split into ${n} part(s) that will each be written separately (about ${Math.round(minutes / n * 10) / 10} minutes of speech each). Shape the lesson however you think teaches it best.
 Return: {"title":"<short lesson title>","sections":[{"title":"...","plan":"<what this part covers and how you intend to show it on the board>"}]}
@@ -194,7 +202,7 @@ I'll then ask you for each part in turn.`,
     }));
     const id = `${new Date().toISOString().slice(0, 10)}-${slug(outline.title || topic)}-${crypto.randomBytes(2).toString('hex')}`;
     const lesson = {
-      id, session, topic, minutes, level, teacher, model: model || DEFAULT_MODEL,
+      id, session, topic, minutes, level, tone, teacher, model: model || DEFAULT_MODEL,
       createdAt: new Date().toISOString(), outline, sections: [], asides: [], feedback: [],
     };
     await fsp.mkdir(path.join(lessonDir(id), 'audio'), { recursive: true });
@@ -217,9 +225,16 @@ I'll then ask you for each part in turn.`,
   async 'POST question'({ id, section, step, question, recent }) {
     const lesson = await loadLesson(id);
     // Fork the lesson session so the aside knows the whole lesson without blocking the next part.
+    const last = lesson.outline.sections.length - 1;
+    const atEnd = section >= last && step >= (lesson.sections[last]?.steps?.length || 0);
     const { json: aside } = await claudeJson({
-      teacher: lesson.teacher, model: lesson.model, session: { id: lesson.session, fork: true },
-      prompt: `The lesson is being performed; you are in part ${section + 1} ("${lesson.outline.sections[section]?.title}"), step ${step + 1}.
+      teacher: lesson.teacher, tone: lesson.tone, model: lesson.model, session: { id: lesson.session, fork: true },
+      prompt: atEnd
+        ? `The lesson has been performed to the end, and you asked the student if they had any questions.
+They asked: "${question}"
+Answer it. The answer starts on a fresh, empty board (the final board is restored afterwards), so draw whatever helps. Take as long as the question deserves. Don't wrap up the whole lesson again or say goodbye; you'll ask if there are more questions afterwards.
+Return: {"steps":[...]}`
+        : `The lesson is being performed; you are in part ${section + 1} ("${lesson.outline.sections[section]?.title}"), step ${step + 1}.
 What you said just before: "${(recent || '').slice(-1500)}"
 A student raised their hand and asked: "${question}"
 Answer it as an aside. The aside starts on a fresh, empty board (the current board is saved and restored after you finish), so draw whatever helps. Take as long as the question deserves, then hand back to the lesson.
@@ -327,8 +342,34 @@ function sendFile(res, file) {
   });
 }
 
+// Speech-to-text for spoken questions: raw recorded audio in, { text } out (ElevenLabs Scribe).
+async function transcribe(req, res) {
+  const chunks = [];
+  for await (const c of req) chunks.push(c);
+  const type = req.headers['content-type'] || 'audio/webm';
+  const form = new FormData();
+  form.append('model_id', process.env.ELEVENLABS_STT_MODEL || 'scribe_v2');
+  form.append('tag_audio_events', 'false');
+  form.append('file', new Blob([Buffer.concat(chunks)], { type }), 'question.' + (type.includes('mp4') ? 'm4a' : 'webm'));
+  const r = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
+    method: 'POST', headers: { 'xi-api-key': ELEVENLABS_API_KEY }, body: form,
+  });
+  const data = await r.json();
+  console.log(`stt: ${Buffer.concat(chunks).length} bytes ${type} -> ${r.status} "${(data.text || '').slice(0, 80)}"`);
+  if (!r.ok) throw new Error(data?.detail?.message || `ElevenLabs STT error ${r.status}`);
+  res.writeHead(200, { 'content-type': 'application/json' });
+  res.end(JSON.stringify({ text: (data.text || '').trim() }));
+}
+
 http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
+  if (req.method === 'POST' && url.pathname === '/api/stt') {
+    return transcribe(req, res).catch(e => {
+      console.error(e);
+      res.writeHead(500, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: e.message }));
+    });
+  }
   if (url.pathname.startsWith('/api/')) {
     const fn = api[`${req.method} ${url.pathname.slice(5)}`];
     if (!fn) { res.writeHead(404); return res.end(); }

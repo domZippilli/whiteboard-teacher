@@ -15,7 +15,7 @@ const api = async (path, body, method) => {
 
 // ---------- settings ----------
 
-const DEFAULTS = { teacher: 'Claude', voice: '', rate: 1, model: 'opus', minutes: 5, level: '', captions: false };
+const DEFAULTS = { teacher: 'Claude', voice: '', rate: 1, model: 'opus', minutes: 5, level: '', tone: '', captions: false };
 const settings = { ...DEFAULTS, ...safeJson(localStorage.getItem('wt-settings')) };
 function safeJson(s) { try { return JSON.parse(s) || {}; } catch { return {}; } }
 function saveSettings() { try { localStorage.setItem('wt-settings', JSON.stringify(settings)); } catch {} }
@@ -64,6 +64,136 @@ const stripCues = text => text.replace(/\[[^\]]*\]\s*/g, '').trim();
 // Estimated seconds for text when we have no timings (browser voice).
 const estimate = text => (text.split(/\s+/).filter(Boolean).length / 2.6 + (text.match(/[.,;:!?]/g) || []).length * 0.15);
 
+// ---------- little spoken lines ----------
+// Short lines in the teacher's voice outside the script: "Hmm..." while a question is being
+// answered, "Any questions?" at the end. Cached on disk per voice.
+
+const LINES = {
+  hmm: [
+    '[thoughtful] Hmm...',
+    '[thoughtful] Hmm, good question...',
+    '[curious] Ooh. Let me think...',
+    '[thoughtful] Hmm... okay...',
+  ],
+  anyQuestions: [
+    '[warmly] And that\'s the lesson. [pause] So... any questions?',
+    '[warmly] That\'s it for today. [pause] Any questions? Anything you\'d like me to go over again?',
+  ],
+  anyMore: [
+    '[warmly] Any other questions?',
+    '[curious] Anything else you\'re wondering about?',
+  ],
+};
+const lineAudio = new Audio();
+function warmLines() { if (config.tts) Object.values(LINES).flat().forEach(t => speech(t)); }
+async function sayLine(kind) {
+  const list = LINES[kind];
+  const text = list[Math.floor(Math.random() * list.length)];
+  if (!config.tts) {
+    const u = new SpeechSynthesisUtterance(stripCues(text));
+    u.rate = settings.rate;
+    return speechSynthesis.speak(u);
+  }
+  const r = await speech(text);
+  if (!r?.url) return;
+  levelAudio(lineAudio);
+  lineAudio.src = r.url;
+  lineAudio.playbackRate = settings.rate;
+  lineAudio.play().catch(() => {});
+}
+const hmm = () => sayLine('hmm');
+
+// ---------- speaking questions ----------
+// Click the mic to record, click again (or pause speaking) to stop; the transcript is then asked.
+
+const mic = { rec: null, stream: null, stopTimer: null };
+// btn: the mic button (shows recording state); input: where status shows as placeholder.
+async function startRecording({ btn, input }, onText) {
+  try {
+    mic.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+  } catch (e) { input.placeholder = 'Microphone blocked; type your question'; return; }
+  const type = ['audio/webm;codecs=opus', 'audio/mp4'].find(t => MediaRecorder.isTypeSupported(t)) || '';
+  const rec = (mic.rec = new MediaRecorder(mic.stream, type ? { mimeType: type } : {}));
+  const chunks = [];
+  rec.ondataavailable = e => e.data.size && chunks.push(e.data);
+  btn.classList.add('rec');
+  input.placeholder = 'Listening… (click 🎤 to finish)';
+
+  // Level meter + auto-stop after ~1.8s of silence once you've started talking.
+  audioCtx ||= new AudioContext();
+  audioCtx.resume();
+  const an = new AnalyserNode(audioCtx, { fftSize: 1024 });
+  // Route through a muted gain to the output so every browser keeps the analyser running.
+  audioCtx.createMediaStreamSource(mic.stream).connect(an).connect(new GainNode(audioCtx, { gain: 0 })).connect(audioCtx.destination);
+  const startedAt = performance.now();
+  const buf = new Float32Array(an.fftSize);
+  let spoke = false, quietSince = performance.now();
+  const meter = () => {
+    if (mic.rec !== rec || rec.state !== 'recording') return;
+    an.getFloatTimeDomainData(buf);
+    const rms = Math.sqrt(buf.reduce((a, v) => a + v * v, 0) / buf.length);
+    btn.style.setProperty('--level', Math.min(1, rms * 8).toFixed(2));
+    if (rms > 0.015) { spoke = true; quietSince = performance.now(); }
+    else if (spoke && performance.now() - quietSince > 1800) return stopRecording();
+    requestAnimationFrame(meter);
+  };
+  meter();
+
+  rec.onstop = async () => {
+    mic.stream.getTracks().forEach(t => t.stop());
+    btn.classList.remove('rec');
+    btn.style.setProperty('--level', 0);
+    if (mic.rec !== rec) return; // cancelled
+    // The level meter only drives auto-stop; let the transcriber decide whether anything was said.
+    if (!chunks.length || performance.now() - startedAt < 400) { input.placeholder = "Recording was too short; try again or type"; return; }
+    btn.classList.add('busy');
+    input.placeholder = 'Transcribing…';
+    try {
+      const blob = new Blob(chunks, { type: rec.mimeType || 'audio/webm' });
+      const res = await fetch('/api/stt', { method: 'POST', headers: { 'content-type': blob.type }, body: blob });
+      const { text, error } = await res.json();
+      if (error) throw new Error(error);
+      if (text) onText(text);
+      else input.placeholder = "Heard no words; try again or type";
+    } catch (e) {
+      input.placeholder = `Couldn't transcribe (${e.message}); type instead`;
+    } finally { btn.classList.remove('busy'); }
+  };
+  rec.start();
+}
+function stopRecording() { if (mic.rec?.state === 'recording') mic.rec.stop(); }
+const recording = () => mic.rec?.state === 'recording';
+
+// ---------- loading quips ----------
+
+const QUIPS = {
+  lesson: [
+    'Doing a little research…', 'Getting some library books…', 'Writing a lesson plan…',
+    'Drinking some warm tea…', 'Sharpening my pencils…', 'Uncapping the markers…',
+    'Dusting off the whiteboard…', 'Hunting for the perfect analogy…', 'Asking the librarian…',
+    'Sketching a few diagrams…', 'Stretching before class…', 'Checking my notes twice…',
+    'Finding my good chalk… er, marker…', 'Straightening my bow tie…',
+  ],
+  question: [
+    'Ooh, good one…', 'Flipping through my notes…', 'Thinking how to draw this…',
+    'Scratching my chin…', 'Finding a clean spot on the board…', 'Consulting the big book…',
+  ],
+};
+let quipTimer;
+function startQuips(kind) {
+  clearInterval(quipTimer);
+  const list = [...QUIPS[kind]].sort(() => Math.random() - 0.5);
+  let i = 0;
+  const el = $('#quip');
+  const next = () => {
+    el.classList.remove('in');
+    setTimeout(() => { el.textContent = list[i++ % list.length]; el.classList.add('in'); }, 250);
+  };
+  next();
+  quipTimer = setInterval(next, 2800);
+}
+function stopQuips() { clearInterval(quipTimer); }
+
 // ---------- player clock ----------
 // A pausable clock; all waits in the player go through it.
 
@@ -105,6 +235,7 @@ class Player {
     this.stop();
     this.lesson = lesson;
     this.pos = { section: 0, step: 0 };
+    this.endRound = 0;
     this.board.reset();
     $('#lessonTitle').textContent = lesson.outline?.title || lesson.topic;
     renderTimeline();
@@ -125,6 +256,7 @@ class Player {
     l.pending ||= {};
     l.pending[i] ||= api('section', { id: l.id, index: i }).then(s => {
       l.sections[i] = s;
+      (s.steps || []).slice(0, 2).forEach(st => speech(st.say, l.id));
       renderTimeline();
       return s;
     }).finally(() => delete l.pending[i]);
@@ -171,8 +303,10 @@ class Player {
       if (section + 1 < l.outline.sections.length) this.section(section + 1).catch(() => {});
       const steps = sec.steps || [];
       while (alive() && this.pos.step < steps.length) {
-        // Prefetch speech for the next few steps.
-        for (let k = 1; k <= 3; k++) speech(steps[this.pos.step + k]?.say, l.id);
+        // Prefetch speech for the next few steps (into the next part, if it's written).
+        // ElevenLabs takes ~4s per paragraph, so anything not prefetched is an audible gap.
+        const ahead = [...steps.slice(this.pos.step + 1), ...(l.sections[section + 1]?.steps || [])].slice(0, 3);
+        ahead.forEach(st => speech(st.say, l.id));
         renderProgress();
         await this.playStep(steps[this.pos.step], alive);
         if (!alive()) return;
@@ -186,7 +320,22 @@ class Player {
     this.playing = false;
     updatePlayButton();
     renderProgress();
-    showFeedback();
+    this.endQuestions();
+  }
+
+  // End of lesson: invite questions (not everyone likes to interrupt). Answers play as asides,
+  // after which the final board is restored and we come back here with "any other questions?".
+  endQuestions() {
+    caption('');
+    const again = this.endRound++ > 0;
+    sayLine(again ? 'anyMore' : 'anyQuestions');
+    showEndQuestions(again);
+  }
+
+  askAtEnd(question) {
+    const last = this.lesson.outline.sections.length - 1;
+    this.pos = { section: last, step: this.lesson.sections[last]?.steps.length || 0 };
+    this.ask(question);
   }
 
   // Play one step (or aside step): speech plus its ops on the step's timeline.
@@ -308,11 +457,15 @@ class Player {
     updatePlayButton();
     const steps = this.lesson.sections[section]?.steps || [];
     const recent = steps.slice(Math.max(0, step - 4), step + 1).map(s => stripCues(s.say || '')).join(' ');
-    showPrep('Thinking about your question…');
+    showPrep('Thinking about your question…', false, 'question');
+    hmm();
     let aside;
     try {
       aside = await api('question', { id: this.lesson.id, section, step, question, recent });
     } catch (e) { showPrep(`Couldn't answer: ${e.message}`, true); return; }
+    // Keep the thinking screen up until the first line of the answer can be spoken.
+    (aside.steps || []).slice(1, 3).forEach(st => speech(st.say, this.lesson.id));
+    await speech(aside.steps?.[0]?.say, this.lesson.id);
     hidePrep();
     this.lesson.asides.push(aside);
     renderTimeline();
@@ -326,8 +479,10 @@ class Player {
     this.playing = true;
     updatePlayButton();
     this.board.reset();
-    for (const s of aside.steps || []) {
-      await this.playStep(s, alive);
+    const steps = aside.steps || [];
+    for (let k = 0; k < steps.length; k++) {
+      steps.slice(k + 1, k + 4).forEach(st => speech(st.say, this.lesson.id));
+      await this.playStep(steps[k], alive);
       if (!alive()) return;
     }
     this.seek(this.pos.section, this.pos.step);
@@ -335,6 +490,7 @@ class Player {
 }
 
 const player = new Player();
+window.wt = { player }; // for debugging from the console
 
 // ---------- UI ----------
 
@@ -343,10 +499,16 @@ function caption(text) {
   c.textContent = text;
   c.classList.toggle('hidden', !settings.captions || !text);
 }
-function showPrep(text, error) {
+// kind: 'lesson' or 'question' picks the quips; errors hide the animation.
+function showPrep(text, error, kind = 'lesson') {
+  const wasHidden = $('#prep').classList.contains('hidden');
   $('#prep').classList.remove('hidden');
   $('#prepText').textContent = text;
-  $('#prep .spinner').classList.toggle('hidden', !!error);
+  $('#prep .doodle').classList.toggle('hidden', !!error);
+  $('#quip').classList.toggle('hidden', !!error);
+  if (error) stopQuips();
+  else if (wasHidden || kind !== showPrep.kind) startQuips(kind);
+  showPrep.kind = kind;
 }
 // Start card: shown when opening a saved lesson (a click also unlocks audio) or when the
 // browser blocked autoplay mid-lesson.
@@ -358,7 +520,7 @@ function showStart({ resume, fresh } = {}) {
   $('#startOver').classList.toggle('hidden', !!(resume || fresh));
 }
 function hideStart() { $('#start').classList.add('hidden'); }
-function hidePrep() { $('#prep').classList.add('hidden'); }
+function hidePrep() { $('#prep').classList.add('hidden'); stopQuips(); showPrep.kind = null; }
 function updatePlayButton() { $('#playBtn').textContent = player.playing && !player.paused ? '⏸' : '▶'; }
 
 function renderTimeline() {
@@ -402,6 +564,16 @@ function saveProgress() {
   progressTimer = setTimeout(() => api('progress', { id: player.lesson.id, ...player.pos }).catch(() => {}), 1000);
 }
 
+function showEndQuestions(again) {
+  const box = $('#endQ');
+  box.classList.remove('hidden');
+  $('#endTitle').textContent = again ? 'Any other questions?' : 'Any questions?';
+  $('#endInput').value = '';
+  $('#endInput').placeholder = 'Type or 🎤 speak your question';
+  $('#endInput').focus();
+}
+function hideEndQuestions() { stopRecording(); mic.rec = null; $('#endQ').classList.add('hidden'); }
+
 function showFeedback() {
   caption('');
   const fb = $('#feedback');
@@ -417,6 +589,7 @@ function show(screen) {
   $('#lesson').classList.toggle('hidden', screen !== 'lesson');
   $('#feedback').classList.add('hidden');
   $('#handBox').classList.add('hidden');
+  $('#endQ').classList.add('hidden');
   hideStart();
   hidePrep();
 }
@@ -472,7 +645,7 @@ async function startLesson(topic, minutes = settings.minutes) {
   showPrep(`${settings.teacher} is planning the lesson…`);
   let lesson;
   try {
-    lesson = await api('outline', { topic, minutes: +minutes, level: settings.level, teacher: settings.teacher, model: settings.model });
+    lesson = await api('outline', { topic, minutes: +minutes, level: settings.level, tone: settings.tone, teacher: settings.teacher, model: settings.model });
   } catch (e) { return showPrep(`Something went wrong: ${e.message}`, true); }
   history.replaceState({}, '', `/?lesson=${lesson.id}`);
   for (const s of lesson.outline.sections) {
@@ -517,6 +690,17 @@ function wire() {
   markLength();
   $('#level').value = settings.level;
   $('#level').onchange = () => { settings.level = $('#level').value; saveSettings(); };
+  $('#tone').value = settings.tone;
+  $('#tone').onchange = () => { settings.tone = $('#tone').value; saveSettings(); };
+
+  // Mic on the home screen: speak a topic, and the lesson starts once it's transcribed.
+  $('#homeMic').onclick = () => {
+    if (recording()) return stopRecording();
+    startRecording({ btn: $('#homeMic'), input: $('#q') }, text => {
+      $('#q').value = text;
+      $('#askForm').requestSubmit();
+    });
+  };
 
   $('#homeBtn').onclick = goHome;
   $('#startGo').onclick = () => {
@@ -535,15 +719,29 @@ function wire() {
     $('#caption').classList.toggle('hidden', !settings.captions || !$('#caption').textContent);
   };
 
-  const openHand = () => {
+  const openHand = (listen = false) => {
     if (!player.lesson) return;
     if (player.playing && !player.paused) player.togglePause();
     $('#handBox').classList.remove('hidden');
     $('#handQ').value = '';
+    $('#handQ').placeholder = 'Type or 🎤 speak your question';
     $('#handQ').focus();
+    if (listen) toggleMic();
   };
-  const closeHand = () => $('#handBox').classList.add('hidden');
-  $('#handBtn').onclick = openHand;
+  const closeHand = () => { stopRecording(); mic.rec = null; $('#handBox').classList.add('hidden'); };
+  // Spoken questions are asked as soon as they're transcribed.
+  const toggleMic = () => {
+    if (recording()) return stopRecording();
+    startRecording({ btn: $('#micBtn'), input: $('#handQ') }, text => {
+      $('#handQ').value = text;
+      $('#handForm').requestSubmit();
+    });
+  };
+  $('#micBtn').onclick = toggleMic;
+  $('#handQ').addEventListener('keydown', e => {
+    if (e.key === 'Escape') { closeHand(); if (player.paused) player.togglePause(); }
+  });
+  $('#handBtn').onclick = () => openHand();
   $('#handCancel').onclick = () => { closeHand(); if (player.paused) player.togglePause(); };
   $('#handForm').onsubmit = e => {
     e.preventDefault();
@@ -561,7 +759,24 @@ function wire() {
     await api('feedback', { id: player.lesson.id, liked: fb.dataset.liked === '' ? null : fb.dataset.liked === 'true', text: $('#fbText').value });
     $('#fbSend').textContent = 'Thanks!';
   };
-  $('#fbReplay').onclick = () => { fb.classList.add('hidden'); player.seek(0, 0); };
+  $('#fbReplay').onclick = () => { fb.classList.add('hidden'); player.endRound = 0; player.seek(0, 0); };
+
+  // End-of-lesson questions
+  $('#endForm').onsubmit = e => {
+    e.preventDefault();
+    const q = $('#endInput').value.trim();
+    if (!q) return;
+    hideEndQuestions();
+    player.askAtEnd(q);
+  };
+  $('#endMic').onclick = () => {
+    if (recording()) return stopRecording();
+    startRecording({ btn: $('#endMic'), input: $('#endInput') }, text => {
+      $('#endInput').value = text;
+      $('#endForm').requestSubmit();
+    });
+  };
+  $('#endNone').onclick = () => { hideEndQuestions(); lineAudio.pause(); showFeedback(); };
   $('#fbHome').onclick = goHome;
 
   document.addEventListener('keydown', e => {
@@ -570,6 +785,7 @@ function wire() {
     else if (e.key === 'ArrowRight') player.next();
     else if (e.key === 'ArrowLeft') player.prev();
     else if (e.key === '?' || e.key === 'h') { e.preventDefault(); openHand(); }
+    else if (e.key === 'm') { e.preventDefault(); openHand(true); }
     else if (e.key === 'c') $('#ccBtn').click();
     else if (e.key === 'Escape') closeHand();
   });
@@ -588,7 +804,8 @@ function wire() {
   // Preview a voice when it's picked.
   $('#sVoice').onchange = async () => {
     const sel = $('#sVoice');
-    const name = sel.selectedOptions[0]?.textContent.split(' (')[0];
+    // Introduce with the teacher's name as typed in the form, not the voice's name.
+    const name = $('#sName').value.trim() || 'Claude';
     const text = `Hi, I'm ${name}. Let's learn something.`;
     if (config.tts) {
       const r = await api('tts', { text, voice: sel.value }).catch(() => null);
@@ -651,6 +868,7 @@ function route() {
 (async function init() {
   try { config = await api('config'); } catch {}
   applyName();
+  warmLines();
   wire();
   route();
 })();
