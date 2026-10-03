@@ -383,7 +383,7 @@ async function writeSection(id, index) {
     mode: 'continue', lesson,
     prompt: `Write part ${index + 1} of ${n}: "${s.title}". About ${words} spoken words.
 ${index === 0 ? 'This is the opening of the lesson; the board starts empty.' : `Part ${index} has just been performed and this part follows it straight away, with no break: the student never left, so just carry on (no greeting, "welcome back" or recap of what was just said). The board still shows whatever part ${index} left there.`}
-${index === n - 1 ? 'This is the final part of the lesson.' : ''}
+${index === n - 1 ? 'This is the final part of the lesson. After it, the app itself asks "any questions?" and then gives a short quiz, so don\'t quiz the student or ask for questions here.' : ''}
 Return: {"steps":[...]}`,
   }));
   // The conversation may have moved to another backend (fallback): remember where it lives now.
@@ -429,7 +429,7 @@ const api = {
       teacher, tone, policy: policyFor(ctx.user), profile: readProfile(ctx.user.id), model,
       mode: 'start', name: `Lesson: ${topic}`.slice(0, 80),
       prompt: `A student asked: "${topic}"
-Plan a ${minutes}-minute lesson${level ? ` for a ${level} audience` : ''}, split into ${n} part(s) that will each be written separately but played back to back as one continuous lesson (about ${Math.round(minutes / n * 10) / 10} minutes of speech each). Shape the lesson however you think teaches it best.
+Plan a ${minutes}-minute lesson${level ? ` for a ${level} audience` : ''}, split into ${n} part(s) that will each be written separately but played back to back as one continuous lesson, followed by a separate question time and quiz (about ${Math.round(minutes / n * 10) / 10} minutes of speech each). Shape the lesson however you think teaches it best.
 Return: {"title":"<short lesson title>","sections":[{"title":"...","plan":"<what this part covers and how you intend to show it on the board>"}]}
 I'll then ask you for each part in turn.`,
     });
