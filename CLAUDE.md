@@ -35,8 +35,16 @@ See `PLAN.md` for status, decisions and roadmap.
   `PLAN-CONFIGURABLE-BACKENDS.md`. `backends/index.js` builds them from `data/config.json`, or from
   `.env` when there is none (claude-cli + ElevenLabs, the original setup).
 - Interfaces: text `start/continue/fork/once` (returns `{ convo, text }`), voice `voices()/speak()`
-  (returns `{ audio, mime, ext, timing? }`), listening `transcribe()`. Types today: `claude-cli`,
-  `elevenlabs`, `elevenlabs-stt`. No backend for a job → 503 "the teacher isn't available".
+  (returns `{ audio, mime, ext, timing? }`), listening `transcribe()`. Types: text `claude-cli`,
+  `openai-chat`; voice `elevenlabs`, `browser-model`; listening `elevenlabs-stt`, `browser-transcribe`.
+  No backend for a job → 503 "the teacher isn't available".
+- `openai-chat` (llama.cpp, vLLM, Ollama, …): JSON mode via `response_format`, Qwen-style thinking toggle
+  (`chat_template_kwargs.enable_thinking`), `<think>` stripped. No server-side conversations, so
+  messages are stored in `data/convos/<id>.json` (`convo` = `oc:<id>`).
+- `askJson()` tries `lessons` backends in order; a lesson's conversation belongs to `lesson.convoBackend`;
+  another backend taking over starts afresh seeded with the outline + parts so far (`lessonSoFar`).
+  `utilityOnce()` does the same fallback for screening/profiles. Never commit lab hostnames/model
+  names: they belong in `data/config.json`.
 - Admin › Backends edits `data/config.json` (0600) live: services (each type's `meta.fields` drive
   the form), and the ordered list per job. Secrets: typed, `$ENV_VAR` or `op://…`; stored as given
   (references, not values) and never sent to the browser (masked). `backends.update()` rebuilds

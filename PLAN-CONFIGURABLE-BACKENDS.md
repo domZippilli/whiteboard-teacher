@@ -1,6 +1,6 @@
 # Plan: configurable backends
 
-Status: in progress (2026-10-03). Steps 1–4 done.
+Status: in progress (2026-10-03). Steps 1–4 done; step 5 `openai-chat` done.
 
 ## Goal
 Let the admin choose, for the whole server, which service does each job: writing lessons, screening
@@ -133,12 +133,13 @@ backends unless testing shows a need for more.
 2. ✅ **Voice catalog and learner choice**: admin enables/names voices per backend; learners pick.
 3. ✅ **`browser-model` voice with Kokoro**: worker, model download, settings, fallback rules.
 4. ✅ **Admin › Backends**: add/edit backends, order per job, secrets, Test, health.
-5. **`openai-chat` and `anthropic-messages`** text backends (for the lab model), conversation storage.
+5. ✅ **`openai-chat`** (done; tested with a Qwen 27B on llama.cpp: outline+screening 9 s, a part 17 s,
+   quiz 7 s, refusal 3 s) and **`anthropic-messages`** (not yet) text backends (for the lab model), conversation storage.
 6. **`openai-speech`** voice (Kokoro-FastAPI etc.) and **`openai-transcribe`** listening.
 7. **`browser-recognition`** listening (optional).
 
 ## Decisions
-- **Lab model**: Qwen on vLLM, which serves the OpenAI-compatible API, so `openai-chat` is enough
+- **Lab model**: Qwen (served by llama.cpp, not vLLM as first thought); OpenAI-compatible, so `openai-chat` is enough
   to start. vLLM also supports structured output (`response_format` with a JSON schema / guided
   decoding), which `openai-chat` should use when available to keep lesson JSON valid.
 - **No AI, no lecture**: if every `utility` backend is down, screening refuses kindly ("the teacher

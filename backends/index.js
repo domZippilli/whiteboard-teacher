@@ -12,12 +12,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import * as claudeCli from './text/claude-cli.js';
+import * as openaiChat from './text/openai-chat.js';
 import * as elevenlabs from './voice/elevenlabs.js';
 import * as elevenlabsStt from './listening/elevenlabs-stt.js';
 import * as browserModel from './voice/browser-model.js';
 import * as browserTranscribe from './listening/browser-transcribe.js';
 
-const TYPES = Object.fromEntries([claudeCli, elevenlabs, elevenlabsStt, browserModel, browserTranscribe].map(m => [m.type, m]));
+const TYPES = Object.fromEntries([claudeCli, openaiChat, elevenlabs, elevenlabsStt, browserModel, browserTranscribe].map(m => [m.type, m]));
 export const JOBS = ['lessons', 'utility', 'voice', 'listening'];
 // Which kind of backend each job takes.
 const JOB_KIND = { lessons: 'text', utility: 'text', voice: 'voice', listening: 'listening' };

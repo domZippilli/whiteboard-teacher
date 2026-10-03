@@ -46,14 +46,8 @@ const PORT = process.env.PORT || 4747;
 // Which service does each job (lessons, utility, voice, listening): data/config.json, or .env defaults.
 const backends = loadBackends({
   dataDir: path.resolve(ROOT, process.env.DATA_DIR || 'data'), env: process.env, opRead,
-  defaults: { 'claude-cli': { cwd: SESSIONS } },
+  defaults: { 'claude-cli': { cwd: SESSIONS }, 'openai-chat': { convoDir: path.resolve(ROOT, process.env.DATA_DIR || 'data', 'convos') } },
 });
-// "No AI, no lecture": with no backend for a job, requests that need it fail kindly.
-function backendFor(job) {
-  const b = backends.first(job);
-  if (!b) throw Object.assign(new Error("The teacher isn't available right now. Please try again soon."), { status: 503 });
-  return b;
-}
 
 const accounts = createAccounts(DATA);
 
@@ -181,7 +175,7 @@ async function updateProfile(lessonId) {
     } : 'skipped or not taken',
     feedback: (lesson.feedback || []).map(f => ({ liked: f.liked, said: f.text })),
   };
-  const text = await backendFor('utility').once({
+  const text = await utilityOnce({
     system: `You maintain a learning profile for one student of a whiteboard teaching app: a short plain-English guide
 for the teacher (an AI that writes their lessons) on how this student learns best. Update it with evidence from
 the lesson they just had. Keep what's still true, revise what the evidence contradicts, and don't over-react to
@@ -220,7 +214,7 @@ class Refused extends Error {
 async function screen(text, kind, user) {
   const p = policyFor(user);
   if (!p) return { decision: 'allow' };
-  const reply = await backendFor('utility').once({
+  const reply = await utilityOnce({
     system: `You screen requests for a whiteboard teaching app against a content policy written by the person who runs it (often a parent or teacher).
 POLICY:
 ${p}
@@ -251,20 +245,66 @@ Reply with ONLY JSON: {"decision":"allow|adapt|refuse","note":"...","message":".
   return v;
 }
 
-// Ask the `lessons` backend and parse the JSON reply; on bad JSON, ask once more in the same conversation.
-// mode: 'start' (new conversation; `name` labels it), 'continue' or 'fork' (of `convo`).
-// Returns { json, convo }.
-async function askJson({ teacher, tone, policy, profile, model, mode, convo, name, prompt }) {
-  const b = backendFor('lessons');
+// Ask the `lessons` backends (in order, skipping unhealthy ones) and parse the JSON reply; on bad
+// JSON, ask once more in the same conversation. mode: 'start' (new conversation; `name` labels it),
+// 'continue' or 'fork' (of `lesson`'s conversation). A conversation belongs to the backend that
+// started it; if another backend has to take over, it starts afresh with the lesson so far as context.
+// Returns { json, convo, backend } (convo/backend to store on the lesson when continuing).
+async function askJson({ teacher, tone, policy, profile, model, mode, lesson, name, prompt }) {
   const system = system_(teacher, tone, policy, profile);
-  let r = await b[mode]({ system, prompt, convo, name, model });
-  try {
-    return { json: parseJson(r.text), convo: r.convo };
-  } catch (e) {
-    r = await b.continue({ system, convo: r.convo, model,
-      prompt: `That was not valid JSON (${e.message}). Reply again with the complete, valid JSON only.` });
-    return { json: parseJson(r.text), convo: r.convo };
+  const candidates = backends.jobs.lessons.filter(backends.healthy);
+  if (!candidates.length) throw httpError(503, "The teacher isn't available right now. Please try again soon.");
+  let lastError;
+  for (const b of candidates) {
+    // Older lessons have no convoBackend: their conversation is a claude-cli session.
+    const owns = lesson && (lesson.convoBackend ? lesson.convoBackend === b.id : b.type === 'claude-cli');
+    const reseed = mode !== 'start' && !owns;
+    const call = {
+      system, name,
+      convo: reseed ? undefined : lesson && lessonConvo(lesson),
+      prompt: reseed ? `${lessonSoFar(lesson)}\n\n${prompt}` : prompt,
+      model: b.type === 'claude-cli' ? model : undefined, // learner/admin model choice is a Claude one
+    };
+    try {
+      let r = await b[reseed ? 'start' : mode](call);
+      let json;
+      try { json = parseJson(r.text); } catch (e) {
+        console.warn(`bad JSON from ${b.id} (${r.text.length} chars, ${e.message}): ${r.text.slice(0, 200)} … ${r.text.slice(-200)}`);
+        r = await b.continue({ system, convo: r.convo, model: call.model,
+          prompt: `That was not valid JSON (${e.message}). Reply again with the complete, valid JSON only.` });
+        json = parseJson(r.text);
+      }
+      return { json, convo: r.convo, backend: b.id };
+    } catch (e) {
+      lastError = e;
+      // Service problems (unreachable, auth, quota, server errors) take it out of rotation for a
+      // while; bad JSON twice just moves on to the next backend.
+      if (e.status !== undefined || /reach|timeout|claude exited|claude error/i.test(e.message)) backends.markFailed(b, e);
+      console.warn(`lessons backend ${b.id} failed: ${e.message}`);
+    }
   }
+  throw lastError;
+}
+
+// Context for a backend taking over a lesson it didn't start: the plan and what's been performed.
+function lessonSoFar(lesson) {
+  const parts = (lesson.sections || []).map((s, i) => s && `Part ${i + 1} script: ${JSON.stringify(s)}`).filter(Boolean);
+  return `You are continuing a lesson that is already under way (the same teacher persona; another
+model wrote the earlier turns). The student asked: "${lesson.topic}".
+The plan you made: ${JSON.stringify(lesson.outline)}
+${parts.length ? parts.join('\n') : 'No parts have been performed yet.'}`;
+}
+
+// One-off requests for the `utility` job (screening, profile updates), with fallback.
+async function utilityOnce({ system, prompt }) {
+  const candidates = backends.jobs.utility.filter(backends.healthy);
+  if (!candidates.length) throw httpError(503, "The teacher isn't available right now. Please try again soon.");
+  let lastError;
+  for (const b of candidates) {
+    try { return await b.once({ system, prompt }); }
+    catch (e) { lastError = e; backends.markFailed(b, e); }
+  }
+  throw lastError;
 }
 
 // A lesson's main conversation takes one turn at a time.
@@ -336,15 +376,16 @@ async function writeSection(id, index) {
   const n = outline.sections.length;
   const s = outline.sections[index];
   const words = Math.round((minutes * WPM) / n);
-  const { json: section } = await inSession(lessonConvo(lesson), () => askJson({
+  const { json: section, convo, backend } = await inSession(lesson.id, () => askJson({
     teacher: lesson.teacher, tone: lesson.tone, policy: lessonPolicy(lesson), profile: readProfile(lesson.owner), model: lesson.model,
-    mode: 'continue', convo: lessonConvo(lesson),
+    mode: 'continue', lesson,
     prompt: `Write part ${index + 1} of ${n}: "${s.title}". About ${words} spoken words.
 ${index === 0 ? 'This is the opening of the lesson; the board starts empty.' : `Part ${index} has just been performed; the board still shows whatever it left there.`}
 ${index === n - 1 ? 'This is the final part of the lesson.' : ''}
 Return: {"steps":[...]}`,
   }));
-  await updateLesson(id, l => { l.sections[index] = section; });
+  // The conversation may have moved to another backend (fallback): remember where it lives now.
+  await updateLesson(id, l => { l.sections[index] = section; l.convo = convo; l.convoBackend = backend; });
   return section;
 }
 
@@ -358,7 +399,7 @@ async function writeQuiz(id) {
   const count = lesson.minutes <= 5 ? 3 : lesson.minutes <= 10 ? 5 : 8;
   const { json: quiz } = await askJson({
     teacher: lesson.teacher, tone: lesson.tone, policy: lessonPolicy(lesson), profile: readProfile(lesson.owner), model: lesson.model,
-    mode: 'fork', convo: lessonConvo(lesson),
+    mode: 'fork', lesson,
     prompt: `The lesson has been performed. Now write a short quiz on it: ${count} multiple-choice questions that check
 understanding of the most important ideas you actually taught (not trivia, not anything you didn't cover). Mix
 recall with "why" and "what would happen if" questions. Each has 3 or 4 short choices with exactly one correct.
@@ -381,7 +422,7 @@ const api = {
     // Screen first: nothing reaches the lesson writer until the topic passes the content policy.
     await screen(topic, 'lesson topic', ctx.user);
     const n = Math.max(1, Math.min(40, Math.round(minutes / 1.75)));
-    const { json: outline, convo } = await askJson({
+    const { json: outline, convo, backend } = await askJson({
       teacher, tone, policy: policyFor(ctx.user), profile: readProfile(ctx.user.id), model,
       mode: 'start', name: `Lesson: ${topic}`.slice(0, 80),
       prompt: `A student asked: "${topic}"
@@ -391,7 +432,7 @@ I'll then ask you for each part in turn.`,
     });
     const id = `${new Date().toISOString().slice(0, 10)}-${slug(outline.title || topic)}-${crypto.randomBytes(2).toString('hex')}`;
     const lesson = {
-      id, owner: ctx.user.id, convo, topic, minutes, level, tone, teacher, model: model || null,
+      id, owner: ctx.user.id, convo, convoBackend: backend, topic, minutes, level, tone, teacher, model: model || null,
       createdAt: new Date().toISOString(), outline, sections: [], asides: [], feedback: [],
     };
     await fsp.mkdir(path.join(lessonDir(id), 'audio'), { recursive: true });
@@ -422,7 +463,7 @@ I'll then ask you for each part in turn.`,
     const atEnd = section >= last && step >= (lesson.sections[last]?.steps?.length || 0);
     const { json: aside } = await askJson({
       teacher: lesson.teacher, tone: lesson.tone, policy: lessonPolicy(lesson), profile: readProfile(lesson.owner), model: lesson.model,
-      mode: 'fork', convo: lessonConvo(lesson),
+      mode: 'fork', lesson,
       prompt: atEnd
         ? `The lesson has been performed to the end, and you asked the student if they had any questions.
 They asked: "${question}"
