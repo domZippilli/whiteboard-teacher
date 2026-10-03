@@ -20,6 +20,15 @@ See `PLAN.md` for status, decisions and roadmap.
 - `lessons/` (gitignored) — saved lessons: `<id>/lesson.json` + `audio/<hash>.mp3|.json`;
   `lessons/_cache/` for audio outside a lesson (voice previews, "Hmm...").
 
+## Deploy (homelab)
+- Runs as a systemd **user** service (linger on) with `HOST=127.0.0.1`, behind `tailscale serve --bg
+  --https=<port> http://127.0.0.1:<port>` (HTTPS is needed for the mic and threaded WASM). `PATH` in the
+  unit must include `claude` (claude-cli backend) and node.
+- Update: `git pull` there, then `systemctl --user restart whiteboard-teacher`. Data (`data/`, `lessons/`,
+  `.env`) lives only on that host; claude-cli sessions are in `~/.claude/projects/<encoded sessions dir>/`.
+- `public/manifest.webmanifest` + `icon*.png` make it installable ("Add to Home screen").
+- Host names, ports and model names stay out of the repo.
+
 ## Accounts (V1.5, in progress; see PLAN.md)
 - `accounts.js`: users in `data/users.json` (gitignored; `DATA_DIR` overrides), scrypt-hashed
   PINs/passwords, HMAC-signed cookies (`wt_user` long-lived, `wt_admin` sliding 30 min), lockouts.

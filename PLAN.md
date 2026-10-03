@@ -137,7 +137,7 @@ Needed before learning profiles: the app will move to the homelab and be used fr
 2. ✅ Policies: master + age bands + notes; migration from `content-policy.txt`; refusal log.
 3. ✅ Admin pages: users, policies, history.
 4. ✅ Learning profiles: auto-update after lessons, used in prompts, admin view/edit.
-5. Homelab: `tailscale serve` HTTPS, run as a service, PWA manifest + icon, setup notes.
+5. ✅ Homelab: `tailscale serve` HTTPS, run as a systemd user service, PWA manifest + icon (see CLAUDE.md › Deploy).
 
 ## Next (polish)
 - **Faster start**: stream part 1 so playback begins within seconds instead of 30-60s.
