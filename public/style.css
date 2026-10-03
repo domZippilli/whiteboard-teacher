@@ -312,3 +312,8 @@ button.danger { color: #d23a2f !important; margin-left: auto; }
 .service .result { font-size: 13px; }
 .backends .save { border: 0; border-radius: 999px; padding: 8px 22px; background: var(--accent); color: white; font-weight: 600; }
 .save-row { align-items: center; }
+/* Backends: the Save bar stays in view while scrolling the section, and shows unsaved changes. */
+#adminBackends .save-row { position: sticky; bottom: 0; z-index: 2; background: var(--bg); padding: 10px 0; border-top: 1px solid var(--line); margin-top: 8px; }
+#adminBackends .save-row .msg { font-size: 14px; color: var(--muted); }
+#adminBackends .save-row.dirty .msg { color: #b26a00; font-weight: 600; }
+#adminBackends .save-row .msg.error { color: #c0392b; font-weight: 600; }

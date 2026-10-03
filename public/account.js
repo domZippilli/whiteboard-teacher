@@ -183,12 +183,21 @@ export function createAccountUI({ api, show, onSignedIn, onShowLessons, onPrevie
     voice: ['Voice', 'Speaks the lessons (falls back down the list)'],
     listening: ['Listening', 'Turns spoken questions into text (none = no mic buttons)'],
   };
-  async function renderBackends({ onSaved } = {}) {
+  async function renderBackends({ onSaved, note = '' } = {}) {
     const box = $('#adminBackends');
     const view = await api('admin/backends');
     const state = { backends: structuredClone(view.backends), jobs: structuredClone(view.jobs) };
     const secrets = {}; // id.key → typed value (untouched secrets are kept)
     const typeLabel = t => view.types[t]?.label || t;
+    let dirty = false;
+    const changed = () => {
+      dirty = true;
+      const bar = box.querySelector('.save-row');
+      bar.classList.add('dirty');
+      bar.querySelector('.msg').textContent = 'Unsaved changes';
+    };
+    // Redraw after a change (chips, adding/removing services) keeps the unsaved state visible.
+    const redraw = () => { draw(); if (dirty) changed(); };
     const draw = () => {
       box.innerHTML = `<div class="admin-head"><h2>Backends</h2></div>
         <p class="hint">${view.fromEnv ? 'Using the settings from <code>.env</code>. Saving here switches to these settings (stored in <code>data/config.json</code>).' : 'Stored in <code>data/config.json</code>. Changes apply as soon as you save.'}</p>
@@ -196,7 +205,7 @@ export function createAccountUI({ api, show, onSignedIn, onShowLessons, onPrevie
         <h3 class="sub">Services</h3>
         <div class="services"></div>
         <div class="row"><select class="new-type"><option value="">+ New service…</option>${Object.entries(view.types).map(([t, m]) => `<option value="${t}">${esc(m.label)}</option>`).join('')}</select></div>
-        <div class="row save-row"><button type="button" class="save">Save</button><span class="hint msg"></span></div>`;
+        <div class="row save-row"><button type="button" class="save">Save</button><span class="msg">${esc(note)}</span></div>`;
       const badge = id => {
         const st = view.backends[id]?.status;
         if (!view.backends[id]) return '<span class="badge new">not saved</span>';
@@ -216,16 +225,16 @@ export function createAccountUI({ api, show, onSignedIn, onShowLessons, onPrevie
           chip.innerHTML = `<span class="n">${i + 1}</span> ${esc(id)} ${badge(id)}
             <button type="button" title="Earlier" ${i ? '' : 'disabled'}>↑</button><button type="button" title="Later" ${i < ids.length - 1 ? '' : 'disabled'}>↓</button><button type="button" title="Remove from ${label}">✕</button>`;
           const [up, down, rm] = chip.querySelectorAll('button');
-          up.onclick = () => { [ids[i - 1], ids[i]] = [ids[i], ids[i - 1]]; draw(); };
-          down.onclick = () => { [ids[i + 1], ids[i]] = [ids[i], ids[i + 1]]; draw(); };
-          rm.onclick = () => { ids.splice(i, 1); draw(); };
+          up.onclick = () => { [ids[i - 1], ids[i]] = [ids[i], ids[i - 1]]; dirty = true; redraw(); };
+          down.onclick = () => { [ids[i + 1], ids[i]] = [ids[i], ids[i + 1]]; dirty = true; redraw(); };
+          rm.onclick = () => { ids.splice(i, 1); dirty = true; redraw(); };
           chain.appendChild(chip);
         });
         const candidates = Object.entries(state.backends).filter(([id, b]) => view.types[b.type]?.kind === view.jobKinds[job] && !ids.includes(id));
         if (candidates.length) {
           const sel = document.createElement('select');
           sel.innerHTML = `<option value="">+ add</option>${candidates.map(([id]) => `<option>${esc(id)}</option>`).join('')}`;
-          sel.onchange = () => { ids.push(sel.value); draw(); };
+          sel.onchange = () => { ids.push(sel.value); dirty = true; redraw(); };
           chain.appendChild(sel);
         }
         if (!ids.length) chain.insertAdjacentHTML('beforeend', `<span class="hint">${job === 'voice' ? 'none: the device’s own voice' : job === 'listening' ? 'none: no mic' : 'none'}</span>`);
@@ -257,13 +266,13 @@ export function createAccountUI({ api, show, onSignedIn, onShowLessons, onPrevie
               input.placeholder = m.set ? `${m.hint}${m.source === 'typed' ? '' : ` (from ${m.ref})`}: leave blank to keep` : 'Key, $ENV_VAR or op://vault/item/field';
               input.value = secrets[`${id}.${f.key}`] || '';
               input.autocomplete = 'off';
-              input.oninput = () => { secrets[`${id}.${f.key}`] = input.value; };
+              input.oninput = () => { secrets[`${id}.${f.key}`] = input.value; changed(); };
             } else {
               input.value = b[f.key] ?? '';
               input.placeholder = f.default ?? '';
             }
           }
-          if (f.kind !== 'secret') input.oninput = input.onchange = () => { b[f.key] = input.value; };
+          if (f.kind !== 'secret') input.oninput = input.onchange = () => { b[f.key] = input.value; changed(); };
           lab.appendChild(input);
           if (f.hint) lab.insertAdjacentHTML('beforeend', `<small class="hint">${esc(f.hint)}</small>`);
           fields.appendChild(lab);
@@ -284,7 +293,7 @@ export function createAccountUI({ api, show, onSignedIn, onShowLessons, onPrevie
           if (!confirm(`Remove ${id}?`)) return;
           delete state.backends[id];
           for (const j of Object.keys(state.jobs)) state.jobs[j] = state.jobs[j].filter(x => x !== id);
-          draw();
+          dirty = true; redraw();
         };
         svc.appendChild(card);
       }
@@ -294,10 +303,10 @@ export function createAccountUI({ api, show, onSignedIn, onShowLessons, onPrevie
         let id = t, n = 2;
         while (state.backends[id]) id = `${t}-${n++}`;
         id = (prompt('Name for this service (lowercase, digits, dashes):', id) || '').trim();
-        if (!id) return draw();
-        if (state.backends[id]) { alert('That name is taken'); return draw(); }
+        if (!id) return redraw();
+        if (state.backends[id]) { alert('That name is taken'); return redraw(); }
         state.backends[id] = { type: t };
-        draw();
+        dirty = true; redraw();
       };
       box.querySelector('.save').onclick = async () => {
         const msg = box.querySelector('.msg');
@@ -309,12 +318,12 @@ export function createAccountUI({ api, show, onSignedIn, onShowLessons, onPrevie
           }
           body.backends[id] = out;
         }
+        msg.textContent = 'Saving…';
         try {
           await api('admin/backends', body, 'PUT');
-          msg.textContent = 'Saved.';
+          await renderBackends({ onSaved, note: `Saved at ${new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.` });
           onSaved?.();
-          renderBackends({ onSaved });
-        } catch (err) { msg.textContent = err.message; }
+        } catch (err) { msg.textContent = `Not saved: ${err.message}`; msg.classList.add('error'); }
       };
     };
     draw();
