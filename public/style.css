@@ -248,3 +248,20 @@ button.danger { color: #d23a2f !important; margin-left: auto; }
 #profileText { width: 100%; font: 15px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); color: var(--ink); resize: vertical; margin: 8px 0; }
 #profileSave { border: 0; border-radius: 999px; padding: 8px 20px; background: var(--accent); color: white; font-weight: 600; }
 .history-body .row { align-items: center; }
+
+/* Admin: voices */
+.voices { margin-top: 36px; display: flex; flex-direction: column; gap: 10px; }
+.voices .hint { margin: 0; }
+.voice-card { background: var(--card); border-radius: 14px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+.voice-card h3 { margin: 0; font-size: 15px; }
+.voice-table { display: flex; flex-direction: column; gap: 4px; max-height: 360px; overflow-y: auto; }
+.voice-row { display: grid; grid-template-columns: auto 160px 1fr auto auto; gap: 10px; align-items: center; padding: 4px 0; border-bottom: 1px solid var(--line); }
+.voice-row .nm, .add-voice input { font: inherit; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+.voice-row .desc { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.voice-row .def { font-size: 13px; color: var(--muted); display: flex; gap: 4px; align-items: center; margin: 0; }
+.voice-row .play { border-radius: 999px; padding: 4px 10px; }
+.voice-card .save { border: 0; border-radius: 999px; padding: 8px 20px; background: var(--accent); color: white; font-weight: 600; }
+.voice-card .row { align-items: center; }
+.add-voice input { flex: 1; min-width: 0; }
+.add-voice button { border-radius: 999px; padding: 6px 14px; }
+@media (max-width: 640px) { .voice-row { grid-template-columns: auto 1fr auto auto; } .voice-row .desc { display: none; } }

@@ -37,6 +37,10 @@ See `PLAN.md` for status, decisions and roadmap.
 - Interfaces: text `start/continue/fork/once` (returns `{ convo, text }`), voice `voices()/speak()`
   (returns `{ audio, mime, ext, timing? }`), listening `transcribe()`. Types today: `claude-cli`,
   `elevenlabs`, `elevenlabs-stt`. No backend for a job → 503 "the teacher isn't available".
+- Voice catalog: `data/voices.json` (per voice backend: enabled `{ id, name }` + default), edited in
+  Admin › Voices; without an entry a backend offers its configured voices. Learners pick from
+  `GET voices`; a choice is `"backendId:voiceId"` (older settings: bare id). `resolveVoice()` falls
+  back to the first backend's default; admins may preview voices that aren't enabled.
 - Lessons store their conversation handle as `convo` (older lessons: `session`, a claude-cli id).
 
 ## How lessons are written

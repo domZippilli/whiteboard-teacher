@@ -22,6 +22,18 @@ export function create({ apiKey, model = 'eleven_v3', voices = [], defaultVoice,
     voices: () => voices,
     defaultVoice: defaultVoice || voices[0]?.id,
 
+    // Every voice the account can use, for the admin's voice catalog. Shared-library voices (like the
+    // defaults) aren't listed by the API, so the configured ones are always included.
+    async available() {
+      const res = await fetch('https://api.elevenlabs.io/v2/voices?page_size=100', { headers: { 'xi-api-key': apiKey } });
+      const data = await res.json().catch(() => ({}));
+      const listed = (data.voices || []).map(v => ({
+        id: v.voice_id, name: v.name,
+        description: [v.labels?.accent, v.labels?.gender, v.labels?.age, v.labels?.description || v.labels?.descriptive].filter(Boolean).join(', '),
+      }));
+      return [...voices.filter(v => !listed.some(l => l.id === v.id)), ...listed];
+    },
+
     async speak({ text, voice }) {
       const data = await slot(async () => {
         for (let attempt = 0; ; attempt++) {

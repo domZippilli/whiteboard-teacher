@@ -628,21 +628,31 @@ Return: {"steps":[...]}`,
     const v = backends.first('voice');
     return {
       tts: !!v, // false → the browser's own voice
-      voice: v?.defaultVoice,
+      voice: backends.defaultVoice(),
       audioTags: !!v?.capabilities.audioTags,
     };
   },
 
+  // Voices learners may choose (the admin's catalog), as { value, name, backend, default }.
   async 'GET voices'() {
-    return backends.first('voice')?.voices() || [];
+    return backends.voiceList();
+  },
+
+  async 'GET admin/voices'() {
+    return backends.voiceCatalog();
+  },
+
+  async 'PUT admin/voices'({ backend, enabled, default: def }) {
+    return backends.setVoiceCatalog(backend, { enabled, default: def });
   },
 
   // Speech for one step, with timings when the backend gives them. Cached on disk by (backend,
   // model, voice, text), inside the lesson folder when there is one, so replays are free.
   async 'POST tts'({ text, voice, id }, _, ctx) {
     if (id) await ownLesson(ctx, id);
-    const b = backendFor('voice');
-    voice ||= b.defaultVoice;
+    backendFor('voice');
+    const { backend: b, voice: v } = backends.resolveVoice(voice, { any: ctx.admin });
+    voice = v;
     // The original cache key had no backend id; keep it for ElevenLabs so existing audio stays valid.
     const keyParts = b.type === 'elevenlabs' ? [voice, b.model, text] : [b.id, b.model, voice, text];
     const hash = crypto.createHash('sha1').update(keyParts.join('|')).digest('hex').slice(0, 16);

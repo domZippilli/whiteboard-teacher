@@ -1196,7 +1196,8 @@ async function fillVoices() {
   sel.replaceChildren();
   let voices = [];
   if (config.tts) {
-    try { voices = (await api('voices')).map(v => ({ id: v.id, name: v.name })); } catch {}
+    // The admin's catalog, across voice services: value is "backend:voice".
+    try { voices = (await api('voices')).map(v => ({ id: v.value, name: v.name })); } catch {}
   } else {
     voices = speechSynthesis.getVoices().filter(v => v.lang.startsWith('en')).map(v => ({ id: v.name, name: `${v.name} (${v.lang})` }));
   }
@@ -1205,7 +1206,10 @@ async function fillVoices() {
     o.value = v.id; o.textContent = v.name;
     sel.appendChild(o);
   }
-  sel.value = (config.tts ? settings.voice || config.voice : settings.browserVoice) || '';
+  // Older settings hold a bare ElevenLabs voice id; match it to its "backend:voice" entry.
+  const want = config.tts ? settings.voice || config.voice : settings.browserVoice;
+  const match = voices.find(v => v.id === want) || voices.find(v => want && v.id.endsWith(':' + want));
+  sel.value = match?.id || (config.tts ? config.voice : '') || '';
 }
 
 function route() {
@@ -1231,6 +1235,11 @@ function clearAsk() {
 
 const account = createAccountUI({
   api, show, onSignedIn: signedIn,
+  // Admin voice catalog: play a sample of any voice, named as it would introduce itself.
+  onPreviewVoice: async (voice, name) => {
+    const r = await api('tts', { text: `Hi, I'm ${name}. Let's learn something.`, voice }).catch(() => null);
+    if (r?.url) { const a = new Audio(r.url); a.play(); }
+  },
   onShowLessons: u => account.renderHistory(u, {
     renderLessons: el => renderLibrary({ el, user: u, heading: 'Lessons' }),
   }),
@@ -1268,7 +1277,7 @@ function wireAccount() {
   $('#meAdmin').onclick = async () => {
     show('admin');
     $('#adminHistory').replaceChildren();
-    try { await account.renderUsers(); await account.renderPolicies(); } catch { goHome(); }
+    try { await account.renderUsers(); await account.renderVoices(); await account.renderPolicies(); } catch { goHome(); }
   };
   $('#adminBack').onclick = goHome;
 }

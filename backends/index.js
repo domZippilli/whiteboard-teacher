@@ -65,9 +65,58 @@ export function loadBackends({ dataDir, env, secret, opRead, defaults }) {
     built[id] = Object.assign(mod.create(s), { id });
   }
   const jobs = Object.fromEntries(JOBS.map(j => [j, (config.jobs?.[j] || []).map(id => built[id]).filter(Boolean)]));
+
+  // ----- voice catalog -----
+  // data/voices.json: per voice backend, the voices learners may pick ({ id, name }) and the default.
+  // Without an entry, a backend offers its configured voices. A learner's choice is "backendId:voiceId".
+  const catalogFile = path.join(dataDir, 'voices.json');
+  let catalog = {};
+  try { catalog = JSON.parse(fs.readFileSync(catalogFile, 'utf8')); } catch {}
+  const catalogFor = b => catalog[b.id] || { enabled: b.voices().map(v => ({ id: v.id, name: v.name })), default: b.defaultVoice };
+
   return {
     jobs,
     first: job => jobs[job][0] || null,
+
+    // Voices learners can choose, across all voice backends in order.
+    voiceList: () => jobs.voice.flatMap(b => {
+      const c = catalogFor(b);
+      return c.enabled.map(v => ({ value: `${b.id}:${v.id}`, backend: b.id, id: v.id, name: v.name, default: v.id === c.default }));
+    }),
+    // The default voice: the first backend's default.
+    defaultVoice() {
+      const b = jobs.voice[0];
+      return b ? `${b.id}:${catalogFor(b).default || catalogFor(b).enabled[0]?.id}` : null;
+    },
+    // Turn a learner's choice into { backend, voice }. Older settings hold a bare voice id. Falls back
+    // to the first backend's default when the choice isn't enabled (any more).
+    // `any` (admin previews) allows voices that aren't enabled yet.
+    resolveVoice(choice, { any = false } = {}) {
+      let [bid, vid] = String(choice || '').includes(':') ? String(choice).split(':') : [null, choice];
+      for (const b of jobs.voice) {
+        if (bid && b.id !== bid) continue;
+        if ((any && bid && vid) || catalogFor(b).enabled.some(v => v.id === vid)) return { backend: b, voice: vid };
+      }
+      const b = jobs.voice[0];
+      return b ? { backend: b, voice: catalogFor(b).default || catalogFor(b).enabled[0]?.id } : null;
+    },
+    // Admin: everything each voice backend offers, with what's enabled.
+    async voiceCatalog() {
+      return Promise.all(jobs.voice.map(async b => {
+        let available = b.voices();
+        try { if (b.available) available = await b.available(); } catch (e) { console.warn(`voices for ${b.id}: ${e.message}`); }
+        return { backend: b.id, type: b.type, describe: b.describe(), available, ...catalogFor(b) };
+      }));
+    },
+    setVoiceCatalog(backendId, { enabled, default: def }) {
+      if (!jobs.voice.some(b => b.id === backendId)) throw Object.assign(new Error('No such voice backend'), { status: 404 });
+      enabled = (enabled || []).filter(v => v && v.id).map(v => ({ id: String(v.id), name: String(v.name || v.id).slice(0, 40) }));
+      if (!enabled.length) throw Object.assign(new Error('Enable at least one voice'), { status: 400 });
+      catalog[backendId] = { enabled, default: enabled.some(v => v.id === def) ? def : enabled[0].id };
+      fs.writeFileSync(catalogFile, JSON.stringify(catalog, null, 2));
+      return catalog[backendId];
+    },
+
     describe: () => JOBS.map(j => `${j}: ${jobs[j].map(b => b.describe()).join(' → ') || '(none)'}`).join('\n  '),
   };
 }

@@ -25,7 +25,7 @@ function avatarPicker(el, current) {
   return () => chosen;
 }
 
-export function createAccountUI({ api, show, onSignedIn, onShowLessons }) {
+export function createAccountUI({ api, show, onSignedIn, onShowLessons, onPreviewVoice }) {
   // ----- first run -----
   function showSetup() {
     show('setup');
@@ -175,6 +175,66 @@ export function createAccountUI({ api, show, onSignedIn, onShowLessons }) {
     dlg.showModal();
   }
 
+  // ----- admin: voices -----
+  // For each voice backend: what it offers, which voices learners may pick, their names, the default.
+  async function renderVoices() {
+    const box = $('#adminVoices');
+    const catalog = await api('admin/voices');
+    box.innerHTML = `<div class="admin-head"><h2>Voices</h2></div>
+      <p class="hint">Choose the voices learners can pick, and give them friendly names. ▶ plays a sample.</p>`;
+    if (!catalog.length) { box.innerHTML += '<p class="hint">No voice service is set up, so the device\'s own voice is used.</p>'; return; }
+    for (const c of catalog) {
+      const card = document.createElement('div');
+      card.className = 'voice-card';
+      card.innerHTML = `<h3>${esc(c.describe)}</h3>
+        <div class="voice-table"></div>
+        <div class="row add-voice"><input placeholder="Add a voice by ID"><input placeholder="Name"><button type="button" class="ghost">Add</button></div>
+        <div class="row"><button type="button" class="save">Save</button><span class="hint msg"></span></div>`;
+      const table = card.querySelector('.voice-table');
+      // Enabled voices first (in catalog order), then everything else the backend offers.
+      const rows = [
+        ...c.enabled.map(v => ({ ...c.available.find(a => a.id === v.id), ...v, on: true })),
+        ...c.available.filter(a => !c.enabled.some(v => v.id === a.id)).map(a => ({ ...a, on: false })),
+      ];
+      const radio = `default-${c.backend}`;
+      const addRow = v => {
+        const r = document.createElement('div');
+        r.className = 'voice-row';
+        r.innerHTML = `<input type="checkbox" class="on" title="Learners can pick this voice">
+          <input class="nm" placeholder="Name">
+          <span class="desc"></span>
+          <label class="def"><input type="radio" name="${radio}"> default</label>
+          <button type="button" class="ghost play" title="Play a sample">▶</button>`;
+        r.dataset.id = v.id;
+        r.querySelector('.on').checked = v.on;
+        // Suggest the first name ("Roger - Laid-Back, Casual" → "Roger") for voices not yet enabled.
+        r.querySelector('.nm').value = v.on ? v.name : String(v.name || v.id).split(' - ')[0];
+        r.querySelector('.desc').textContent = v.description || v.id;
+        r.querySelector('.def input').checked = v.id === c.default;
+        r.querySelector('.play').onclick = () => onPreviewVoice?.(`${c.backend}:${v.id}`, r.querySelector('.nm').value);
+        r.querySelector('.nm').oninput = () => { r.querySelector('.on').checked = true; };
+        table.appendChild(r);
+      };
+      rows.forEach(addRow);
+      const [idIn, nameIn, addBtn] = card.querySelectorAll('.add-voice input, .add-voice button');
+      addBtn.onclick = () => {
+        if (!idIn.value.trim()) return;
+        addRow({ id: idIn.value.trim(), name: nameIn.value.trim() || idIn.value.trim(), on: true });
+        idIn.value = nameIn.value = '';
+      };
+      card.querySelector('.save').onclick = async () => {
+        const enabled = [...table.querySelectorAll('.voice-row')].filter(r => r.querySelector('.on').checked)
+          .map(r => ({ id: r.dataset.id, name: r.querySelector('.nm').value.trim() }));
+        const def = [...table.querySelectorAll('.voice-row')].find(r => r.querySelector('.def input').checked)?.dataset.id;
+        try {
+          await api('admin/voices', { backend: c.backend, enabled, default: def }, 'PUT');
+          card.querySelector('.msg').textContent = 'Saved.';
+        } catch (err) { card.querySelector('.msg').textContent = err.message; }
+      };
+      box.appendChild(card);
+    }
+  }
+
   // ----- admin: content rules -----
   async function renderPolicies() {
     const box = $('#adminPolicies');
@@ -302,5 +362,5 @@ export function createAccountUI({ api, show, onSignedIn, onShowLessons }) {
     }
   }
 
-  return { showSetup, showPicker, askAdminPassword, renderUsers, renderPolicies, renderRefusals, renderHistory };
+  return { showSetup, showPicker, askAdminPassword, renderUsers, renderPolicies, renderRefusals, renderHistory, renderVoices };
 }

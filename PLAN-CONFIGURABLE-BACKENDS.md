@@ -1,6 +1,6 @@
 # Plan: configurable backends
 
-Status: in progress (2026-10-03). Step 1 done.
+Status: in progress (2026-10-03). Steps 1–2 done.
 
 ## Goal
 Let the admin choose, for the whole server, which service does each job: writing lessons, screening
@@ -128,7 +128,7 @@ backends unless testing shows a need for more.
 ## Steps
 1. ✅ **Refactor** today's code behind the interfaces (`claude-cli`, `elevenlabs`, `elevenlabs-stt`,
    `browser-speech`), config loader with `.env` defaults. No behaviour change.
-2. **Voice catalog and learner choice**: admin enables/names voices per backend; learners pick.
+2. ✅ **Voice catalog and learner choice**: admin enables/names voices per backend; learners pick.
 3. **`browser-model` voice with Kokoro**: worker, model download, settings, fallback rules.
 4. **Admin › Backends**: add/edit backends, order per job, secrets, Test, health.
 5. **`openai-chat` and `anthropic-messages`** text backends (for the lab model), conversation storage.
