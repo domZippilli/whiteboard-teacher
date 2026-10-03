@@ -1,0 +1,52 @@
+// Voice backend: ElevenLabs text-to-speech with per-character timings ("with-timestamps").
+// The v3 model understands [audio tags] like [excited] or [whispers].
+
+export const type = 'elevenlabs';
+
+// settings: { apiKey, model, voices: [{ id, name }], defaultVoice, concurrency }
+export function create({ apiKey, model = 'eleven_v3', voices = [], defaultVoice, concurrency = 2 }) {
+  // ElevenLabs plans cap concurrent requests (3 on the current plan): queue beyond `concurrency`.
+  let active = 0;
+  const waiting = [];
+  const slot = async fn => {
+    if (active >= concurrency) await new Promise(r => waiting.push(r));
+    active++;
+    try { return await fn(); } finally { active--; waiting.shift()?.(); }
+  };
+
+  return {
+    type,
+    capabilities: { timings: true, audioTags: model === 'eleven_v3', runsIn: 'server' },
+    model,
+    describe: () => `ElevenLabs ${model}`,
+    voices: () => voices,
+    defaultVoice: defaultVoice || voices[0]?.id,
+
+    async speak({ text, voice }) {
+      const data = await slot(async () => {
+        for (let attempt = 0; ; attempt++) {
+          const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voice}/with-timestamps?output_format=mp3_44100_128`, {
+            method: 'POST',
+            headers: { 'xi-api-key': apiKey, 'content-type': 'application/json' },
+            body: JSON.stringify({ text, model_id: model }),
+          });
+          const data = await res.json();
+          if (res.ok) return data;
+          if (res.status === 429 && attempt < 4) { await new Promise(r => setTimeout(r, 1000 * (attempt + 1))); continue; }
+          throw Object.assign(new Error(data?.detail?.message || `ElevenLabs error ${res.status}`), { status: res.status });
+        }
+      });
+      const a = data.alignment || {};
+      return {
+        audio: Buffer.from(data.audio_base64, 'base64'),
+        mime: 'audio/mpeg',
+        ext: 'mp3',
+        timing: {
+          chars: a.characters || [],
+          starts: a.character_start_times_seconds || [],
+          duration: (a.character_end_times_seconds || []).at(-1) || 0,
+        },
+      };
+    },
+  };
+}

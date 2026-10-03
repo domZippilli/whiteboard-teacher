@@ -7,9 +7,10 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createAccounts } from './accounts.js';
+import { loadBackends } from './backends/index.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, 'public');
@@ -30,36 +31,42 @@ try {
 
 // A secret can be given directly (FOO) or as a 1Password reference (FOO_OP_REF = op://vault/item/field),
 // resolved once at startup with the `op` CLI (needs OP_SERVICE_ACCOUNT_TOKEN or desktop integration).
-function secret(name, defaultRef) {
-  if (process.env[name]) return process.env[name];
-  const ref = process.env[`${name}_OP_REF`] || defaultRef;
-  if (!ref) return '';
+function opRead(ref) {
   try {
     return execFileSync('op', ['read', ref], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   } catch {
-    console.warn(`Could not read ${name} from 1Password (${ref})`);
+    console.warn(`Could not read ${ref} from 1Password`);
     return '';
   }
 }
+function secret(name) {
+  if (process.env[name]) return process.env[name];
+  const ref = process.env[`${name}_OP_REF`];
+  return ref ? opRead(ref) : '';
+}
 
 const PORT = process.env.PORT || 4747;
-const DEFAULT_MODEL = process.env.MODEL || 'opus';
-const ELEVENLABS_API_KEY = secret('ELEVENLABS_API_KEY');
-// Voices offered in Settings, by first name. Shared-library voices work without adding them to the account.
-const VOICES = [
-  { name: 'Justin', id: 'uFIXVu9mmnDZ7dTKCBTX' }, // "Justin Time - Elearning Narration"
-  { name: 'Alexander', id: 'hIru3zkEJ3dBYHTbMy2V' }, // "Alexander - Clear, Steady and Refined"
-];
-const DEFAULT_VOICE = process.env.ELEVENLABS_VOICE || VOICES[0].id;
-const TTS_MODEL = process.env.ELEVENLABS_MODEL || 'eleven_v3'; // v3 understands [audio tags] for expressive delivery
+
+// Which service does each job (lessons, utility, voice, listening): data/config.json, or .env defaults.
+const backends = loadBackends({
+  dataDir: path.resolve(ROOT, process.env.DATA_DIR || 'data'), env: process.env, secret, opRead,
+  defaults: { 'claude-cli': { cwd: SESSIONS } },
+});
+// "No AI, no lecture": with no backend for a job, requests that need it fail kindly.
+function backendFor(job) {
+  const b = backends.first(job);
+  if (!b) throw Object.assign(new Error("The teacher isn't available right now. Please try again soon."), { status: 503 });
+  return b;
+}
 
 const accounts = createAccounts(DATA);
 
 const SCRIPT_API = () => fs.readFileSync(path.join(ROOT, 'docs/SCRIPT_API.md'), 'utf8');
 
-// ---------- Claude (via the `claude` CLI) ----------
-// Each lesson is one Claude Code session (named "Lesson: <title>"), so every part is written with
-// the whole lesson so far in context. Questions fork that session so asides don't interrupt it.
+// ---------- writing lessons ----------
+// Each lesson is one conversation with the `lessons` backend (for claude-cli, a Claude Code session
+// named "Lesson: <title>"), so every part is written with the whole lesson so far in context.
+// Questions and the quiz fork that conversation so they don't interrupt it.
 
 // Teaching personalities the student can pick. The material stays accurate whatever the tone.
 const TONES = {
@@ -69,7 +76,7 @@ const TONES = {
   goofy: 'Goofy: playful and silly. Puns, absurd analogies, funny doodles on the board, comic timing (use the audio cues: [laughs], [gasps], [whispers], dramatic pauses), maybe a running gag. Still teach the material accurately and completely; the silliness is how you make it stick, not a replacement for substance.',
 };
 
-function system(teacher, tone, policy, profile = '') {
+function system_(teacher, tone, policy, profile = '') {
   return `You are ${teacher || 'Claude'}, a brilliant${TONES[tone] ? '' : ', warm'} teacher giving a live lesson at a whiteboard. You write lessons as scripts that a program performs: your words are spoken by a text-to-speech voice and your drawing is drawn live in sync. Be the teacher you'd most want to learn from: make it vivid, visual and genuinely interesting.
 ${TONES[tone] ? `\nYour teaching personality for this lesson, chosen by the student: ${TONES[tone]}\n` : ''}${policyPrompt(policy)}${profilePrompt(profile)}
 Here is the complete reference for the script format:
@@ -178,9 +185,8 @@ async function updateProfile(lessonId) {
     } : 'skipped or not taken',
     feedback: (lesson.feedback || []).map(f => ({ liked: f.liked, said: f.text })),
   };
-  const r = await claudeRun([
-    '--model', process.env.PROFILE_MODEL || 'sonnet', '--no-session-persistence',
-    '--system-prompt', `You maintain a learning profile for one student of a whiteboard teaching app: a short plain-English guide
+  const text = await backendFor('utility').once({
+    system: `You maintain a learning profile for one student of a whiteboard teaching app: a short plain-English guide
 for the teacher (an AI that writes their lessons) on how this student learns best. Update it with evidence from
 the lesson they just had. Keep what's still true, revise what the evidence contradicts, and don't over-react to
 one lesson. Be specific and practical ("loves big-number comparisons", "lost interest in long derivations",
@@ -192,7 +198,7 @@ Use these sections (omit any with nothing to say yet):
 ## Watch out for            (misconceptions, sensitivities, things that didn't land)
 Do NOT write a "${ADMIN_SECTION}" section; that one is written by the parent/teacher and kept separately.
 Reply with ONLY the profile markdown.`,
-    `Student: ${user.name}, age band ${user.ageBand}.
+    prompt: `Student: ${user.name}, age band ${user.ageBand}.
 ${adminSection(current) ? `The parent/teacher's notes (respect these; they override your inferences):
 ${adminSection(current)}
 ` : ''}
@@ -201,8 +207,8 @@ ${current.replace(adminSection(current), '').trim() || '(empty: this is their fi
 
 Evidence from the lesson just finished:
 ${JSON.stringify(evidence, null, 2)}`,
-  ]);
-  const body = String(r.result || '').replace(/^```(?:markdown)?\n?|```$/g, '').trim();
+  });
+  const body = String(text || '').replace(/^```(?:markdown)?\n?|```$/g, '').trim();
   if (!body) return;
   const admin = adminSection(readProfile(user.id)); // re-read: the admin may have edited meanwhile
   if (current) await fsp.writeFile(profileFile(user.id) + '.prev', current);
@@ -218,9 +224,8 @@ class Refused extends Error {
 async function screen(text, kind, user) {
   const p = policyFor(user);
   if (!p) return { decision: 'allow' };
-  const r = await claudeRun([
-    '--model', process.env.SCREEN_MODEL || 'sonnet', '--no-session-persistence',
-    '--system-prompt', `You screen requests for a whiteboard teaching app against a content policy written by the person who runs it (often a parent or teacher).
+  const reply = await backendFor('utility').once({
+    system: `You screen requests for a whiteboard teaching app against a content policy written by the person who runs it (often a parent or teacher).
 POLICY:
 ${p}
 
@@ -238,9 +243,9 @@ Don't scold or shame: answer with good humor, like a teacher who's heard it all 
 to something genuinely fun and related if you can (a pun or a real-world double meaning is perfect).
 The message is spoken aloud by the teacher's voice, so write it to be said, not read.
 Reply with ONLY JSON: {"decision":"allow|adapt|refuse","note":"...","message":"...","suggestions":["..."]}`,
-    text,
-  ]);
-  const v = parseJson(r.result);
+    prompt: text,
+  });
+  const v = parseJson(reply);
   console.log(`screen ${kind}: ${v.decision} "${text.slice(0, 60)}"${v.note ? ` (${v.note.slice(0, 80)})` : ''}`);
   if (v.decision === 'refuse') {
     const suggestions = (Array.isArray(v.suggestions) ? v.suggestions : []).filter(x => typeof x === 'string' && x.trim()).slice(0, 3);
@@ -250,45 +255,23 @@ Reply with ONLY JSON: {"decision":"allow|adapt|refuse","note":"...","message":".
   return v;
 }
 
-function claudeRun(args) {
-  return new Promise((resolve, reject) => {
-    const p = spawn('claude', ['-p', '--output-format', 'json', '--tools', '', ...args], {
-      cwd: SESSIONS, stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let out = '', err = '';
-    p.stdout.on('data', d => (out += d));
-    p.stderr.on('data', d => (err += d));
-    p.on('error', reject);
-    p.on('close', code => {
-      try {
-        const r = JSON.parse(out);
-        if (r.is_error) return reject(new Error(r.result || 'claude error'));
-        resolve(r);
-      } catch {
-        reject(new Error(`claude exited ${code}: ${(err || out).slice(0, 500)}`));
-      }
-    });
-  });
-}
-
-// Ask within a session and parse the JSON reply; on bad JSON, ask once more in the same session.
-// `session`: { id, create?, fork?, name? }. Returns { json, sessionId }.
-async function claudeJson({ teacher, tone, policy, profile, model, session, prompt }) {
-  const base = ['--model', model || DEFAULT_MODEL, '--system-prompt', system(teacher, tone, policy, profile)];
-  const first = session.create
-    ? ['--session-id', session.id, ...(session.name ? ['-n', session.name] : [])]
-    : ['--resume', session.id, ...(session.fork ? ['--fork-session'] : [])];
-  let r = await claudeRun([...base, ...first, prompt]);
+// Ask the `lessons` backend and parse the JSON reply; on bad JSON, ask once more in the same conversation.
+// mode: 'start' (new conversation; `name` labels it), 'continue' or 'fork' (of `convo`).
+// Returns { json, convo }.
+async function askJson({ teacher, tone, policy, profile, model, mode, convo, name, prompt }) {
+  const b = backendFor('lessons');
+  const system = system_(teacher, tone, policy, profile);
+  let r = await b[mode]({ system, prompt, convo, name, model });
   try {
-    return { json: parseJson(r.result), sessionId: r.session_id };
+    return { json: parseJson(r.text), convo: r.convo };
   } catch (e) {
-    r = await claudeRun([...base, '--resume', r.session_id,
-      `That was not valid JSON (${e.message}). Reply again with the complete, valid JSON only.`]);
-    return { json: parseJson(r.result), sessionId: r.session_id };
+    r = await b.continue({ system, convo: r.convo, model,
+      prompt: `That was not valid JSON (${e.message}). Reply again with the complete, valid JSON only.` });
+    return { json: parseJson(r.text), convo: r.convo };
   }
 }
 
-// Main lesson sessions take one turn at a time.
+// A lesson's main conversation takes one turn at a time.
 const sessionQueues = new Map();
 function inSession(id, fn) {
   const run = (sessionQueues.get(id) || Promise.resolve()).then(fn);
@@ -316,6 +299,8 @@ const httpError = (status, message) => Object.assign(new Error(message), { statu
 
 // The content policy that applies to a lesson is its learner's (master + band + notes).
 const lessonPolicy = lesson => policyFor(accounts.byId(lesson.owner));
+// The lesson's main conversation (older lessons stored a claude-cli session id as `session`).
+const lessonConvo = lesson => lesson.convo || lesson.session;
 
 // Load a lesson the signed-in user may use: their own, or any lesson for an admin.
 async function ownLesson(ctx, id) {
@@ -355,8 +340,9 @@ async function writeSection(id, index) {
   const n = outline.sections.length;
   const s = outline.sections[index];
   const words = Math.round((minutes * WPM) / n);
-  const { json: section } = await inSession(lesson.session, () => claudeJson({
-    teacher: lesson.teacher, tone: lesson.tone, policy: lessonPolicy(lesson), profile: readProfile(lesson.owner), model: lesson.model, session: { id: lesson.session },
+  const { json: section } = await inSession(lessonConvo(lesson), () => askJson({
+    teacher: lesson.teacher, tone: lesson.tone, policy: lessonPolicy(lesson), profile: readProfile(lesson.owner), model: lesson.model,
+    mode: 'continue', convo: lessonConvo(lesson),
     prompt: `Write part ${index + 1} of ${n}: "${s.title}". About ${words} spoken words.
 ${index === 0 ? 'This is the opening of the lesson; the board starts empty.' : `Part ${index} has just been performed; the board still shows whatever it left there.`}
 ${index === n - 1 ? 'This is the final part of the lesson.' : ''}
@@ -364,16 +350,6 @@ Return: {"steps":[...]}`,
   }));
   await updateLesson(id, l => { l.sections[index] = section; });
   return section;
-}
-
-// ElevenLabs plans cap concurrent requests (3 on the current plan).
-const TTS_CONCURRENCY = +process.env.ELEVENLABS_CONCURRENCY || 2;
-let ttsActive = 0;
-const ttsWaiting = [];
-async function ttsSlot(fn) {
-  if (ttsActive >= TTS_CONCURRENCY) await new Promise(r => ttsWaiting.push(r));
-  ttsActive++;
-  try { return await fn(); } finally { ttsActive--; ttsWaiting.shift()?.(); }
 }
 
 async function writeQuiz(id) {
@@ -384,8 +360,9 @@ async function writeQuiz(id) {
   if (!lesson.sections[n - 1]) await api['POST section']({ id, index: n - 1 });
   lesson = await loadLesson(id);
   const count = lesson.minutes <= 5 ? 3 : lesson.minutes <= 10 ? 5 : 8;
-  const { json: quiz } = await claudeJson({
-    teacher: lesson.teacher, tone: lesson.tone, policy: lessonPolicy(lesson), profile: readProfile(lesson.owner), model: lesson.model, session: { id: lesson.session, fork: true },
+  const { json: quiz } = await askJson({
+    teacher: lesson.teacher, tone: lesson.tone, policy: lessonPolicy(lesson), profile: readProfile(lesson.owner), model: lesson.model,
+    mode: 'fork', convo: lessonConvo(lesson),
     prompt: `The lesson has been performed. Now write a short quiz on it: ${count} multiple-choice questions that check
 understanding of the most important ideas you actually taught (not trivia, not anything you didn't cover). Mix
 recall with "why" and "what would happen if" questions. Each has 3 or 4 short choices with exactly one correct.
@@ -408,18 +385,17 @@ const api = {
     // Screen first: nothing reaches the lesson writer until the topic passes the content policy.
     await screen(topic, 'lesson topic', ctx.user);
     const n = Math.max(1, Math.min(40, Math.round(minutes / 1.75)));
-    const session = crypto.randomUUID();
-    await fsp.mkdir(SESSIONS, { recursive: true });
-    const { json: outline } = await inSession(session, () => claudeJson({
-      teacher, tone, policy: policyFor(ctx.user), profile: readProfile(ctx.user.id), model, session: { id: session, create: true, name: `Lesson: ${topic}`.slice(0, 80) },
+    const { json: outline, convo } = await askJson({
+      teacher, tone, policy: policyFor(ctx.user), profile: readProfile(ctx.user.id), model,
+      mode: 'start', name: `Lesson: ${topic}`.slice(0, 80),
       prompt: `A student asked: "${topic}"
 Plan a ${minutes}-minute lesson${level ? ` for a ${level} audience` : ''}, split into ${n} part(s) that will each be written separately (about ${Math.round(minutes / n * 10) / 10} minutes of speech each). Shape the lesson however you think teaches it best.
 Return: {"title":"<short lesson title>","sections":[{"title":"...","plan":"<what this part covers and how you intend to show it on the board>"}]}
 I'll then ask you for each part in turn.`,
-    }));
+    });
     const id = `${new Date().toISOString().slice(0, 10)}-${slug(outline.title || topic)}-${crypto.randomBytes(2).toString('hex')}`;
     const lesson = {
-      id, owner: ctx.user.id, session, topic, minutes, level, tone, teacher, model: model || DEFAULT_MODEL,
+      id, owner: ctx.user.id, convo, topic, minutes, level, tone, teacher, model: model || null,
       createdAt: new Date().toISOString(), outline, sections: [], asides: [], feedback: [],
     };
     await fsp.mkdir(path.join(lessonDir(id), 'audio'), { recursive: true });
@@ -448,8 +424,9 @@ I'll then ask you for each part in turn.`,
     // Fork the lesson session so the aside knows the whole lesson without blocking the next part.
     const last = lesson.outline.sections.length - 1;
     const atEnd = section >= last && step >= (lesson.sections[last]?.steps?.length || 0);
-    const { json: aside } = await claudeJson({
-      teacher: lesson.teacher, tone: lesson.tone, policy: lessonPolicy(lesson), profile: readProfile(lesson.owner), model: lesson.model, session: { id: lesson.session, fork: true },
+    const { json: aside } = await askJson({
+      teacher: lesson.teacher, tone: lesson.tone, policy: lessonPolicy(lesson), profile: readProfile(lesson.owner), model: lesson.model,
+      mode: 'fork', convo: lessonConvo(lesson),
       prompt: atEnd
         ? `The lesson has been performed to the end, and you asked the student if they had any questions.
 They asked: "${question}"
@@ -646,51 +623,42 @@ Return: {"steps":[...]}`,
       .filter(r => r && (!user || r.user === user)).reverse().slice(0, 200);
   },
 
+  // What the client needs to know about the backends.
   async 'GET config'() {
-    return { model: DEFAULT_MODEL, tts: !!ELEVENLABS_API_KEY, voice: DEFAULT_VOICE };
+    const v = backends.first('voice');
+    return {
+      tts: !!v, // false → the browser's own voice
+      voice: v?.defaultVoice,
+      audioTags: !!v?.capabilities.audioTags,
+    };
   },
 
   async 'GET voices'() {
-    return ELEVENLABS_API_KEY ? VOICES : [];
+    return backends.first('voice')?.voices() || [];
   },
 
-  // Speech for one step, with per-character timings. Cached on disk by (voice, model, text),
-  // inside the lesson folder when there is one, so replays are free.
+  // Speech for one step, with timings when the backend gives them. Cached on disk by (backend,
+  // model, voice, text), inside the lesson folder when there is one, so replays are free.
   async 'POST tts'({ text, voice, id }, _, ctx) {
     if (id) await ownLesson(ctx, id);
-    if (!ELEVENLABS_API_KEY) throw new Error('ElevenLabs key not configured');
-    voice ||= DEFAULT_VOICE;
-    const hash = crypto.createHash('sha1').update(`${voice}|${TTS_MODEL}|${text}`).digest('hex').slice(0, 16);
+    const b = backendFor('voice');
+    voice ||= b.defaultVoice;
+    // The original cache key had no backend id; keep it for ElevenLabs so existing audio stays valid.
+    const keyParts = b.type === 'elevenlabs' ? [voice, b.model, text] : [b.id, b.model, voice, text];
+    const hash = crypto.createHash('sha1').update(keyParts.join('|')).digest('hex').slice(0, 16);
     const dir = id ? path.join(lessonDir(id), 'audio') : path.join(LESSONS, '_cache');
     const base = path.join(dir, hash);
-    const url = '/' + path.relative(ROOT, base + '.mp3').split(path.sep).join('/');
     try {
-      const timing = JSON.parse(await fsp.readFile(base + '.json', 'utf8'));
-      return { url, ...timing };
+      const meta = JSON.parse(await fsp.readFile(base + '.json', 'utf8'));
+      const ext = meta.ext || 'mp3';
+      return { url: '/' + path.relative(ROOT, `${base}.${ext}`).split(path.sep).join('/'), ...meta };
     } catch {}
-    const data = await ttsSlot(async () => {
-      for (let attempt = 0; ; attempt++) {
-        const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voice}/with-timestamps?output_format=mp3_44100_128`, {
-          method: 'POST',
-          headers: { 'xi-api-key': ELEVENLABS_API_KEY, 'content-type': 'application/json' },
-          body: JSON.stringify({ text, model_id: TTS_MODEL }),
-        });
-        const data = await res.json();
-        if (res.ok) return data;
-        if (res.status === 429 && attempt < 4) { await new Promise(r => setTimeout(r, 1000 * (attempt + 1))); continue; }
-        throw new Error(data?.detail?.message || `ElevenLabs error ${res.status}`);
-      }
-    });
-    const a = data.alignment || {};
-    const timing = {
-      chars: a.characters || [],
-      starts: a.character_start_times_seconds || [],
-      duration: (a.character_end_times_seconds || []).at(-1) || 0,
-    };
+    const { audio, ext, timing } = await b.speak({ text, voice });
+    const meta = { ...(timing || {}), ...(ext !== 'mp3' ? { ext } : {}) };
     await fsp.mkdir(dir, { recursive: true });
-    await fsp.writeFile(base + '.mp3', Buffer.from(data.audio_base64, 'base64'));
-    await fsp.writeFile(base + '.json', JSON.stringify(timing));
-    return { url, ...timing };
+    await fsp.writeFile(`${base}.${ext}`, audio);
+    await fsp.writeFile(base + '.json', JSON.stringify(meta));
+    return { url: '/' + path.relative(ROOT, `${base}.${ext}`).split(path.sep).join('/'), ...meta };
   },
 };
 
@@ -698,7 +666,7 @@ Return: {"steps":[...]}`,
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml',
-  '.json': 'application/json', '.mp3': 'audio/mpeg', '.md': 'text/markdown; charset=utf-8', '.png': 'image/png',
+  '.json': 'application/json', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.md': 'text/markdown; charset=utf-8', '.png': 'image/png',
 };
 
 function sendFile(res, file) {
@@ -710,23 +678,16 @@ function sendFile(res, file) {
   });
 }
 
-// Speech-to-text for spoken questions: raw recorded audio in, { text } out (ElevenLabs Scribe).
+// Speech-to-text for spoken questions: raw recorded audio in, { text } out (the `listening` backend).
 async function transcribe(req, res) {
   const chunks = [];
   for await (const c of req) chunks.push(c);
-  const type = req.headers['content-type'] || 'audio/webm';
-  const form = new FormData();
-  form.append('model_id', process.env.ELEVENLABS_STT_MODEL || 'scribe_v2');
-  form.append('tag_audio_events', 'false');
-  form.append('file', new Blob([Buffer.concat(chunks)], { type }), 'question.' + (type.includes('mp4') ? 'm4a' : 'webm'));
-  const r = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
-    method: 'POST', headers: { 'xi-api-key': ELEVENLABS_API_KEY }, body: form,
-  });
-  const data = await r.json();
-  console.log(`stt: ${Buffer.concat(chunks).length} bytes ${type} -> ${r.status} "${(data.text || '').slice(0, 80)}"`);
-  if (!r.ok) throw new Error(data?.detail?.message || `ElevenLabs STT error ${r.status}`);
+  const mime = req.headers['content-type'] || 'audio/webm';
+  const audio = Buffer.concat(chunks);
+  const text = await backendFor('listening').transcribe({ audio, mime });
+  console.log(`stt: ${audio.length} bytes ${mime} -> "${text.slice(0, 80)}"`);
   res.writeHead(200, { 'content-type': 'application/json' });
-  res.end(JSON.stringify({ text: (data.text || '').trim() }));
+  res.end(JSON.stringify({ text }));
 }
 
 const PUBLIC_API = new Set(['GET me', 'GET profiles', 'POST setup', 'POST login', 'POST logout']);
@@ -782,5 +743,5 @@ http.createServer(async (req, res) => {
   fs.stat(file, (err, st) => sendFile(res, !err && st.isFile() ? file : path.join(PUBLIC, 'index.html')));
 }).listen(PORT, () => {
   console.log(`Whiteboard Teacher on http://localhost:${PORT}`);
-  console.log(`  Claude: claude -p --model ${DEFAULT_MODEL}   ElevenLabs: ${ELEVENLABS_API_KEY ? 'ok' : 'off (browser voice)'}`);
+  console.log(`  ${backends.describe()}`);
 });

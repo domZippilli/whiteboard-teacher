@@ -30,9 +30,18 @@ See `PLAN.md` for status, decisions and roadmap.
 - `public/account.js`: setup, profile picker, PIN entry, admin password prompt, admin Users page.
 - Test against a throwaway server: `DATA_DIR=<tmp> PORT=4799 node server.js`.
 
+## Backends
+- `backends/`: which service does each job (`lessons`, `utility`, `voice`, `listening`). See
+  `PLAN-CONFIGURABLE-BACKENDS.md`. `backends/index.js` builds them from `data/config.json`, or from
+  `.env` when there is none (claude-cli + ElevenLabs, the original setup).
+- Interfaces: text `start/continue/fork/once` (returns `{ convo, text }`), voice `voices()/speak()`
+  (returns `{ audio, mime, ext, timing? }`), listening `transcribe()`. Types today: `claude-cli`,
+  `elevenlabs`, `elevenlabs-stt`. No backend for a job → 503 "the teacher isn't available".
+- Lessons store their conversation handle as `convo` (older lessons: `session`, a claude-cli id).
+
 ## How lessons are written
-- Via the `claude` CLI (`claude -p`, no API key). Default model `opus` (`MODEL` in `.env`).
-- Each lesson is one Claude Code session (`--session-id`, then `--resume`), named "Lesson: …",
+- Via the `lessons` backend; by default the `claude` CLI (`claude -p`, no API key), model `opus`.
+- With claude-cli, each lesson is one Claude Code session (`--session-id`, then `--resume`), named "Lesson: …",
   run with cwd `~/.whiteboard-teacher/sessions` so it doesn't load this repo's CLAUDE.md or crowd
   its /resume list. Outline first, then parts written in order in that session. Raise-hand
   questions, end-of-lesson questions and the quiz use `--fork-session`.
