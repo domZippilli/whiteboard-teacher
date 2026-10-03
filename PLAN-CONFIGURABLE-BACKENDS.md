@@ -135,8 +135,10 @@ backends unless testing shows a need for more.
 6. **`openai-speech`** voice (Kokoro-FastAPI etc.) and **`openai-transcribe`** listening.
 7. **`browser-recognition`** listening (optional).
 
-## Open questions
-- The lab model: which server software (Ollama, vLLM, LM Studio, llama.cpp…) and which model? That
-  decides whether `openai-chat` alone is enough to start.
-- Should screening fall back to "refuse when unsure" if every `utility` backend is down, or let
-  requests through? (Proposed: refuse kindly and say the teacher is unavailable.)
+## Decisions
+- **Lab model**: Qwen on vLLM, which serves the OpenAI-compatible API, so `openai-chat` is enough
+  to start. vLLM also supports structured output (`response_format` with a JSON schema / guided
+  decoding), which `openai-chat` should use when available to keep lesson JSON valid.
+- **No AI, no lecture**: if every `utility` backend is down, screening refuses kindly ("the teacher
+  isn't available right now, try again soon") instead of letting requests through. If every
+  `lessons` backend is down, lessons and answers fail the same way. Replays of saved lessons still work.
