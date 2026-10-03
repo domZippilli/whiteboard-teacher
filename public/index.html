@@ -9,8 +9,49 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+  <!-- First run: create the admin -->
+  <main id="setup" class="screen hidden">
+    <form id="setupForm" class="setup-card">
+      <h1>Welcome!</h1>
+      <p>Let's set up the grown-up in charge. The admin manages learners, content rules and profiles.</p>
+      <label>Your name <input id="setupName" required autocomplete="name"></label>
+      <div class="avatars" id="setupAvatars"></div>
+      <label>Admin password <input id="setupPw" type="password" required minlength="6" autocomplete="new-password"></label>
+      <label>Again <input id="setupPw2" type="password" required minlength="6" autocomplete="new-password"></label>
+      <p id="setupErr" class="err"></p>
+      <button type="submit">Create admin</button>
+    </form>
+  </main>
+
+  <!-- Who's learning? -->
+  <main id="picker" class="screen hidden">
+    <div class="picker-inner">
+      <h1>Who's learning?</h1>
+      <div id="profiles" class="profiles"></div>
+    </div>
+  </main>
+
+  <!-- Admin -->
+  <main id="admin" class="screen hidden">
+    <header class="topbar">
+      <button class="icon-btn" id="adminBack" title="Home">←</button>
+      <div class="title">Admin</div>
+    </header>
+    <div class="admin-body">
+      <section id="adminUsers"></section>
+      <section id="adminLessons" class="library"></section>
+    </div>
+  </main>
+
   <!-- Home -->
-  <main id="home" class="screen">
+  <main id="home" class="screen hidden">
+    <div class="me" id="meBox">
+      <button type="button" class="me-chip" id="meChip"></button>
+      <div class="me-menu hidden" id="meMenu">
+        <button type="button" id="meAdmin" class="hidden">🛠 Admin</button>
+        <button type="button" id="meSwitch">👥 Switch profile</button>
+      </div>
+    </div>
     <button class="icon-btn settings-btn" id="openSettings" title="Settings">⚙</button>
     <div class="home-inner">
       <h1 class="teacher-name"><span id="teacherName">Claude</span></h1>
@@ -145,6 +186,51 @@
       <button class="icon-btn" id="ccBtn" title="Captions (c)">CC</button>
     </footer>
   </main>
+
+  <dialog id="pinDlg">
+    <form id="pinForm" class="pin-form">
+      <div id="pinWho" class="pin-who"></div>
+      <input id="pinInput" type="password" required>
+      <p id="pinErr" class="err"></p>
+      <div class="row"><button type="submit">Go</button><button type="button" id="pinCancel" class="ghost">Cancel</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="elevateDlg">
+    <form id="elevateForm" class="pin-form">
+      <h2>Admin password</h2>
+      <p class="hint">Admin mode timed out. Enter your password to continue.</p>
+      <input id="elevateInput" type="password" required autocomplete="current-password">
+      <p id="elevateErr" class="err"></p>
+      <div class="row"><button type="submit">Continue</button><button type="button" id="elevateCancel" class="ghost">Cancel</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="userDlg">
+    <form id="userForm">
+      <h2 id="userDlgTitle">Add learner</h2>
+      <label>Name <input id="uName" required></label>
+      <div class="avatars" id="uAvatars"></div>
+      <label>Role
+        <select id="uRole"><option value="learner">Learner</option><option value="admin">Admin</option></select>
+      </label>
+      <label>Age band (sets their content rules)
+        <select id="uBand"><option value="under8">Under 8</option><option value="8-12">8–12</option><option value="13-17">13–17</option><option value="adult">Adult</option></select>
+      </label>
+      <label id="uSecretLabel">PIN (4–8 digits) <input id="uSecret" type="password" autocomplete="new-password"></label>
+      <label id="uNoPinRow" class="check"><input id="uNoPin" type="checkbox"> No PIN (tap to sign in)</label>
+      <label>Teacher's name for them <input id="uTeacher" placeholder="Claude"></label>
+      <label>Notes for the teacher (interests, sensitivities)
+        <textarea id="uNotes" rows="3" placeholder="Loves dinosaurs. Gets scared by spiders."></textarea>
+      </label>
+      <p id="uErr" class="err"></p>
+      <div class="row">
+        <button type="submit">Save</button>
+        <button type="button" id="uCancel" class="ghost">Cancel</button>
+        <button type="button" id="uDelete" class="ghost danger">Delete</button>
+      </div>
+    </form>
+  </dialog>
 
   <!-- Settings -->
   <dialog id="settings">

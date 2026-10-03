@@ -9,10 +9,12 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createAccounts } from './accounts.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, 'public');
 const LESSONS = path.join(ROOT, 'lessons');
+const DATA = path.resolve(ROOT, process.env.DATA_DIR || 'data'); // users, signing key (gitignored)
 // cwd for `claude -p`: outside the project so lesson sessions don't pick up this repo's CLAUDE.md
 // or crowd its /resume list.
 const SESSIONS = path.join(os.homedir(), '.whiteboard-teacher', 'sessions');
@@ -50,6 +52,8 @@ const VOICES = [
 ];
 const DEFAULT_VOICE = process.env.ELEVENLABS_VOICE || VOICES[0].id;
 const TTS_MODEL = process.env.ELEVENLABS_MODEL || 'eleven_v3'; // v3 understands [audio tags] for expressive delivery
+
+const accounts = createAccounts(DATA);
 
 const SCRIPT_API = () => fs.readFileSync(path.join(ROOT, 'docs/SCRIPT_API.md'), 'utf8');
 
@@ -196,6 +200,16 @@ const lessonFile = id => path.join(lessonDir(id), 'lesson.json');
 async function loadLesson(id) {
   return JSON.parse(await fsp.readFile(lessonFile(id), 'utf8'));
 }
+
+const httpError = (status, message) => Object.assign(new Error(message), { status });
+
+// Load a lesson the signed-in user may use: their own, or any lesson for an admin.
+async function ownLesson(ctx, id) {
+  let lesson;
+  try { lesson = await loadLesson(id); } catch { throw httpError(404, 'No such lesson'); }
+  if (lesson.owner !== ctx.user.id && !ctx.admin) throw httpError(403, 'Not your lesson');
+  return lesson;
+}
 // Serialize writes per lesson so concurrent section/aside saves don't clobber each other.
 const locks = new Map();
 function updateLesson(id, fn) {
@@ -276,7 +290,7 @@ Return: {"questions":[{"q":"...","choices":["..."],"answer":0,"explain":"..."}]}
 }
 
 const api = {
-  async 'POST outline'({ topic, minutes = 5, level, tone, teacher, model }) {
+  async 'POST outline'({ topic, minutes = 5, level, tone, teacher, model }, _, ctx) {
     // Screen first: nothing reaches the lesson writer until the topic passes the content policy.
     await screen(topic, 'lesson topic');
     const n = Math.max(1, Math.min(40, Math.round(minutes / 1.75)));
@@ -291,7 +305,7 @@ I'll then ask you for each part in turn.`,
     }));
     const id = `${new Date().toISOString().slice(0, 10)}-${slug(outline.title || topic)}-${crypto.randomBytes(2).toString('hex')}`;
     const lesson = {
-      id, session, topic, minutes, level, tone, teacher, model: model || DEFAULT_MODEL,
+      id, owner: ctx.user.id, session, topic, minutes, level, tone, teacher, model: model || DEFAULT_MODEL,
       createdAt: new Date().toISOString(), outline, sections: [], asides: [], feedback: [],
     };
     await fsp.mkdir(path.join(lessonDir(id), 'audio'), { recursive: true });
@@ -301,7 +315,9 @@ I'll then ask you for each part in turn.`,
   },
 
   // Deduped: concurrent requests for the same part share one generation.
-  'POST section'({ id, index }) {
+  // ctx is absent for internal calls (prefetching), which skip the ownership check.
+  async 'POST section'({ id, index }, _, ctx) {
+    if (ctx) await ownLesson(ctx, id);
     const key = `${id}:${index}`;
     if (!inflight.has(key)) {
       const p = writeSection(id, index);
@@ -311,8 +327,8 @@ I'll then ask you for each part in turn.`,
     return inflight.get(key);
   },
 
-  async 'POST question'({ id, section, step, question, recent }) {
-    const lesson = await loadLesson(id);
+  async 'POST question'({ id, section, step, question, recent }, _, ctx) {
+    const lesson = await ownLesson(ctx, id);
     // Screen first, as for topics.
     await screen(`Lesson: "${lesson.outline.title}". Question: "${question}"`, "student's question during a lesson");
     // Fork the lesson session so the aside knows the whole lesson without blocking the next part.
@@ -338,7 +354,8 @@ Return: {"steps":[...]}`,
 
   // End-of-lesson quiz, written in a fork of the lesson's session (so it knows exactly what was
   // taught) and saved with the lesson. Deduped like sections, so prefetching is safe.
-  'POST quiz'({ id }) {
+  async 'POST quiz'({ id }, _, ctx) {
+    await ownLesson(ctx, id);
     const key = `${id}:quiz`;
     if (!inflight.has(key)) {
       const p = writeQuiz(id);
@@ -348,31 +365,37 @@ Return: {"steps":[...]}`,
     return inflight.get(key);
   },
 
-  async 'POST quizResult'({ id, score, total, answers }) {
+  async 'POST quizResult'({ id, score, total, answers }, _, ctx) {
+    await ownLesson(ctx, id);
     await updateLesson(id, l => { (l.quizResults ||= []).push({ score, total, answers, at: new Date().toISOString() }); });
     return { ok: true };
   },
 
-  async 'POST feedback'({ id, liked, text }) {
+  async 'POST feedback'({ id, liked, text }, _, ctx) {
+    await ownLesson(ctx, id);
     await updateLesson(id, l => { l.feedback.push({ liked, text, at: new Date().toISOString() }); });
     return { ok: true };
   },
 
-  async 'POST progress'({ id, section, step }) {
+  async 'POST progress'({ id, section, step }, _, ctx) {
+    await ownLesson(ctx, id);
     await updateLesson(id, l => { l.progress = { section, step }; });
     return { ok: true };
   },
 
-  async 'GET lesson'(_, q) {
-    return loadLesson(q.get('id'));
+  async 'GET lesson'(_, q, ctx) {
+    return ownLesson(ctx, q.get('id'));
   },
 
-  async 'GET lessons'() {
+  // The signed-in user's lessons (admins can pass ?user= to see a learner's).
+  async 'GET lessons'(_, q, ctx) {
+    const owner = ctx.admin && q.get('user') ? q.get('user') : ctx.user.id;
     await fsp.mkdir(LESSONS, { recursive: true });
     const out = [];
     for (const d of await fsp.readdir(LESSONS)) {
       try {
         const l = await loadLesson(d);
+        if (l.owner !== owner) continue;
         out.push({
           id: l.id, title: l.outline?.title, topic: l.topic, minutes: l.minutes, createdAt: l.createdAt,
           updatedAt: l.updatedAt, parts: l.outline?.sections?.length, written: l.sections.filter(Boolean).length,
@@ -383,8 +406,73 @@ Return: {"steps":[...]}`,
     return out.sort((a, b) => (b.updatedAt || b.createdAt).localeCompare(a.updatedAt || a.createdAt));
   },
 
-  async 'DELETE lesson'(_, q) {
+  async 'DELETE lesson'(_, q, ctx) {
+    await ownLesson(ctx, q.get('id'));
     await fsp.rm(lessonDir(q.get('id')), { recursive: true, force: true });
+    return { ok: true };
+  },
+
+  // ----- accounts -----
+  // Public (no session needed): me, profiles, setup, login, logout.
+
+  async 'GET me'(_, q, ctx) {
+    return { setup: accounts.needsSetup(), user: accounts.public(ctx.user, true), admin: ctx.admin };
+  },
+
+  // Profiles for the "who's learning?" picker.
+  async 'GET profiles'() {
+    return accounts.users.map(u => accounts.public(u));
+  },
+
+  // First run only: create the admin.
+  async 'POST setup'({ name, avatar, password }, _, ctx) {
+    if (!accounts.needsSetup()) throw httpError(403, 'Already set up');
+    const u = accounts.create({ name, avatar, role: 'admin', ageBand: 'adult', secret: password });
+    ctx.cookies.push(...accounts.login(ctx.req, u.id, password));
+    return { ok: true };
+  },
+
+  async 'POST login'({ id, secret }, _, ctx) {
+    ctx.cookies.push(...accounts.login(ctx.req, id, secret));
+    return { ok: true };
+  },
+
+  async 'POST logout'(_, q, ctx) {
+    ctx.cookies.push(...accounts.logout(ctx.req));
+    return { ok: true };
+  },
+
+  // Admin password again after the 30-minute admin window lapsed.
+  async 'POST elevate'({ password }, _, ctx) {
+    ctx.cookies.push(...accounts.elevate(ctx.req, ctx.user, password));
+    return { ok: true };
+  },
+
+  // Per-user settings. Learners may change their voice, speed and lesson defaults; teacher name
+  // and model are admin choices.
+  async 'PUT settings'(body, _, ctx) {
+    const allowed = ['voice', 'rate', 'minutes', 'level', 'tone', 'captions', 'browserVoice'];
+    if (ctx.user.role === 'admin') allowed.push('teacher', 'model');
+    const picked = Object.fromEntries(Object.entries(body).filter(([k]) => allowed.includes(k)));
+    return accounts.saveSettings(ctx.user, picked);
+  },
+
+  // ----- admin -----
+
+  async 'GET admin/users'() {
+    return accounts.users.map(u => accounts.public(u, true));
+  },
+
+  async 'POST admin/users'(body) {
+    return accounts.public(accounts.create(body), true);
+  },
+
+  async 'PUT admin/users'(body) {
+    return accounts.public(accounts.update(body.id, body), true);
+  },
+
+  async 'DELETE admin/users'(_, q, ctx) {
+    accounts.remove(q.get('id'), ctx.user);
     return { ok: true };
   },
 
@@ -398,7 +486,8 @@ Return: {"steps":[...]}`,
 
   // Speech for one step, with per-character timings. Cached on disk by (voice, model, text),
   // inside the lesson folder when there is one, so replays are free.
-  async 'POST tts'({ text, voice, id }) {
+  async 'POST tts'({ text, voice, id }, _, ctx) {
+    if (id) await ownLesson(ctx, id);
     if (!ELEVENLABS_API_KEY) throw new Error('ElevenLabs key not configured');
     voice ||= DEFAULT_VOICE;
     const hash = crypto.createHash('sha1').update(`${voice}|${TTS_MODEL}|${text}`).digest('hex').slice(0, 16);
@@ -470,38 +559,52 @@ async function transcribe(req, res) {
   res.end(JSON.stringify({ text: (data.text || '').trim() }));
 }
 
+const PUBLIC_API = new Set(['GET me', 'GET profiles', 'POST setup', 'POST login', 'POST logout']);
+const json = (res, status, body, cookies = []) => {
+  res.writeHead(status, { 'content-type': 'application/json', ...(cookies.length ? { 'set-cookie': cookies } : {}) });
+  res.end(JSON.stringify(body));
+};
+
 http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
-  if (req.method === 'POST' && url.pathname === '/api/stt') {
-    return transcribe(req, res).catch(e => {
-      console.error(e);
-      res.writeHead(500, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: e.message }));
-    });
-  }
+  const { user, admin, refresh } = accounts.session(req);
+  const ctx = { req, user, admin, cookies: [...refresh] };
+
   if (url.pathname.startsWith('/api/')) {
-    const fn = api[`${req.method} ${url.pathname.slice(5)}`];
+    const name = `${req.method} ${url.pathname.slice(5)}`;
+    // Authorization: public endpoints, then signed-in users, then admin-only (admin/*, elevate needs a user).
+    if (!PUBLIC_API.has(name)) {
+      if (!user) return json(res, 401, { error: 'Not signed in', signin: true });
+      if (name.includes(' admin/') && !admin) return json(res, 403, { error: 'Admin password needed', elevate: user.role === 'admin' });
+    }
+    if (name === 'POST stt') {
+      return transcribe(req, res).catch(e => { console.error(e); json(res, 500, { error: e.message }); });
+    }
+    const fn = api[name];
     if (!fn) { res.writeHead(404); return res.end(); }
     let body = '';
     for await (const chunk of req) body += chunk;
     try {
-      const out = await fn(body ? JSON.parse(body) : {}, url.searchParams);
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify(out));
+      const out = await fn(body ? JSON.parse(body) : {}, url.searchParams, ctx);
+      json(res, 200, out, ctx.cookies);
     } catch (e) {
-      if (e instanceof Refused) {
-        res.writeHead(422, { 'content-type': 'application/json' });
-        return res.end(JSON.stringify({ error: e.message, refused: true, suggestions: e.suggestions }));
-      }
+      if (e instanceof Refused) return json(res, 422, { error: e.message, refused: true, suggestions: e.suggestions }, ctx.cookies);
+      if (e.status) return json(res, e.status, { error: e.message }, ctx.cookies);
       console.error(e);
-      res.writeHead(500, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: e.message }));
+      json(res, 500, { error: e.message }, ctx.cookies);
     }
     return;
   }
+
+  // Lesson audio: only for the lesson's owner (or an admin); shared cache for any signed-in user.
   if (url.pathname.startsWith('/lessons/')) {
+    if (!user) { res.writeHead(401); return res.end(); }
     const file = path.normalize(path.join(ROOT, decodeURIComponent(url.pathname)));
     if (!file.startsWith(LESSONS + path.sep)) { res.writeHead(403); return res.end(); }
+    const lessonId = path.relative(LESSONS, file).split(path.sep)[0];
+    if (lessonId !== '_cache') {
+      try { await ownLesson(ctx, lessonId); } catch (e) { res.writeHead(e.status || 404); return res.end(); }
+    }
     return sendFile(res, file);
   }
   const file = path.normalize(path.join(PUBLIC, decodeURIComponent(url.pathname)));

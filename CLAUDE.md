@@ -20,6 +20,16 @@ See `PLAN.md` for status, decisions and roadmap.
 - `lessons/` (gitignored) — saved lessons: `<id>/lesson.json` + `audio/<hash>.mp3|.json`;
   `lessons/_cache/` for audio outside a lesson (voice previews, "Hmm...").
 
+## Accounts (V1.5, in progress; see PLAN.md)
+- `accounts.js`: users in `data/users.json` (gitignored; `DATA_DIR` overrides), scrypt-hashed
+  PINs/passwords, HMAC-signed cookies (`wt_user` long-lived, `wt_admin` sliding 30 min), lockouts.
+- Roles: `admin` (password) and `learner` (optional 4–8 digit PIN). First run shows admin setup.
+- `server.js` authorizes every request: public (`me`, `profiles`, `setup`, `login`, `logout`),
+  signed-in, and admin-only (`admin/*`). Lessons have an `owner`; `ownLesson()` guards lesson
+  endpoints and `/lessons/<id>/` files. Settings are per user (`PUT settings`).
+- `public/account.js`: setup, profile picker, PIN entry, admin password prompt, admin Users page.
+- Test against a throwaway server: `DATA_DIR=<tmp> PORT=4799 node server.js`.
+
 ## How lessons are written
 - Via the `claude` CLI (`claude -p`, no API key). Default model `opus` (`MODEL` in `.env`).
 - Each lesson is one Claude Code session (`--session-id`, then `--resume`), named "Lesson: …",

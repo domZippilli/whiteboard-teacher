@@ -1,24 +1,33 @@
 // Whiteboard Teacher — app shell and lesson player.
 import { Board } from './board.js';
+import { createAccountUI } from './account.js';
 
 const $ = s => document.querySelector(s);
-const api = async (path, body, method) => {
+// Signed out → back to the profile picker. Admin mode lapsed → ask for the password and retry once.
+const api = async (path, body, method, retried) => {
   const res = await fetch('/api/' + path, {
     method: method || (body ? 'POST' : 'GET'),
     headers: body ? { 'content-type': 'application/json' } : {},
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await res.json();
+  if (res.status === 401 && data.signin) { player?.stop(); account.showPicker(); }
+  if (res.status === 403 && data.elevate && !retried && await account.askAdminPassword()) return api(path, body, method, true);
   if (!res.ok) throw Object.assign(new Error(data.error || res.statusText), { refused: !!data.refused, suggestions: data.suggestions || [] });
   return data;
 };
 
 // ---------- settings ----------
 
+// Settings belong to the signed-in user and live on the server (so a shared tablet follows the profile).
 const DEFAULTS = { teacher: 'Claude', voice: '', rate: 1, model: 'opus', minutes: 5, level: '', tone: '', captions: false };
-const settings = { ...DEFAULTS, ...safeJson(localStorage.getItem('wt-settings')) };
-function safeJson(s) { try { return JSON.parse(s) || {}; } catch { return {}; } }
-function saveSettings() { try { localStorage.setItem('wt-settings', JSON.stringify(settings)); } catch {} }
+const settings = { ...DEFAULTS };
+let me = null; // { user, admin }
+let settingsTimer;
+function saveSettings() {
+  clearTimeout(settingsTimer);
+  settingsTimer = setTimeout(() => api('settings', settings, 'PUT').catch(() => {}), 300);
+}
 let config = { tts: false };
 
 function applyName() {
@@ -638,7 +647,11 @@ function renderProgress() {
 }
 
 let progressTimer;
+// An admin watching a learner's lesson shouldn't move their resume point, quiz scores or feedback.
+const viewingOthers = () => !!(player.lesson && me?.user && player.lesson.owner && player.lesson.owner !== me.user.id);
+
 function saveProgress() {
+  if (viewingOthers()) return;
   clearTimeout(progressTimer);
   progressTimer = setTimeout(() => api('progress', { id: player.lesson.id, ...player.pos }).catch(() => {}), 1000);
 }
@@ -785,7 +798,7 @@ function endQuiz(skipped) {
   lineAudio.pause();
   if (skipped || !l.quiz) { $('#quiz').classList.add('hidden'); return showFeedback(); }
   const total = l.quiz.questions.length;
-  api('quizResult', { id: l.id, score: quiz.score, total, answers: quiz.answers }).catch(() => {});
+  if (!viewingOthers()) api('quizResult', { id: l.id, score: quiz.score, total, answers: quiz.answers }).catch(() => {});
   $('#quizCount').textContent = 'Quiz complete';
   $('#quizQ').textContent = `You got ${quiz.score} out of ${total}!`;
   $('#quizChoices').replaceChildren();
@@ -819,8 +832,8 @@ function showFeedback() {
 }
 
 function show(screen) {
-  $('#home').classList.toggle('hidden', screen !== 'home');
-  $('#lesson').classList.toggle('hidden', screen !== 'lesson');
+  for (const s of ['home', 'lesson', 'picker', 'setup', 'admin']) $('#' + s).classList.toggle('hidden', screen !== s);
+  $('#meMenu').classList.add('hidden');
   $('#feedback').classList.add('hidden');
   $('#handBox').classList.add('hidden');
   $('#endQ').classList.add('hidden');
@@ -841,13 +854,15 @@ async function goHome() {
   renderLibrary();
 }
 
-async function renderLibrary() {
-  const lib = $('#library');
+// The lesson list: your own on the home screen, or (admin) a learner's on the admin page.
+async function renderLibrary({ el = $('#library'), user, heading = 'Your lessons' } = {}) {
+  const lib = el;
   let lessons = [];
-  try { lessons = await api('lessons'); } catch {}
+  try { lessons = await api('lessons' + (user ? '?user=' + encodeURIComponent(user.id) : '')); } catch {}
   lib.replaceChildren();
-  if (!lessons.length) return;
-  lib.innerHTML = '<h3>Your lessons</h3>';
+  if (!lessons.length) { if (user) lib.innerHTML = `<h3>${heading}</h3><p class="hint">No lessons yet.</p>`; return; }
+  lib.innerHTML = '<h3></h3>';
+  lib.querySelector('h3').textContent = heading;
   for (const l of lessons.slice(0, 30)) {
     const row = document.createElement('div');
     row.className = 'lesson-row';
@@ -865,7 +880,7 @@ async function renderLibrary() {
       e.stopPropagation();
       if (!confirm(`Delete "${t.textContent}"?`)) return;
       await api('lesson?id=' + encodeURIComponent(l.id), null, 'DELETE');
-      renderLibrary();
+      renderLibrary({ el, user, heading });
     };
     // Most recent quiz score, if the quiz was taken (skipped quizzes aren't recorded).
     const grade = document.createElement('div');
@@ -1013,7 +1028,7 @@ function wire() {
     fb.dataset.liked = b.dataset.liked;
   }));
   $('#fbSend').onclick = async () => {
-    await api('feedback', { id: player.lesson.id, liked: fb.dataset.liked === '' ? null : fb.dataset.liked === 'true', text: $('#fbText').value });
+    if (!viewingOthers()) await api('feedback', { id: player.lesson.id, liked: fb.dataset.liked === '' ? null : fb.dataset.liked === 'true', text: $('#fbText').value });
     // Sent: drop the Send button and make "New question" the obvious next step.
     $('#fbSend').classList.add('hidden');
     $('#fbHome').classList.remove('ghost');
@@ -1129,6 +1144,10 @@ function wire() {
   // Settings
   const dlg = $('#settings');
   $('#openSettings').onclick = async () => {
+    // Teacher name and model are the admin's choice; learners just pick voice and speed.
+    const isAdmin = me?.user?.role === 'admin';
+    $('#sName').closest('label').classList.toggle('hidden', !isAdmin);
+    $('#sModel').closest('label').classList.toggle('hidden', !isAdmin);
     $('#sName').value = settings.teacher;
     $('#sRate').value = settings.rate;
     $('#sRateVal').textContent = `${settings.rate}×`;
@@ -1208,10 +1227,59 @@ function clearAsk() {
   $('#q').placeholder = `What would you like ${settings.teacher} to teach you? (hold A to talk)`;
 }
 
-(async function init() {
-  try { config = await api('config'); } catch {}
+// ---------- accounts ----------
+
+const account = createAccountUI({
+  api, show, onSignedIn: signedIn,
+  onShowLessons: u => {
+    renderLibrary({ el: $('#adminLessons'), user: u, heading: `${u.avatar} ${u.name}'s lessons` });
+    $('#adminLessons').scrollIntoView({ behavior: 'smooth' });
+  },
+});
+
+// After sign-in (or on load with a session): load the user's settings and carry on to the app.
+async function signedIn() {
+  me = await api('me');
+  if (!me.user) return account.showPicker();
+  Object.assign(settings, DEFAULTS, me.user.settings || {});
   applyName();
+  const chip = $('#meChip');
+  chip.innerHTML = '<span class="avatar"></span><span class="nm"></span>';
+  chip.querySelector('.avatar').textContent = me.user.avatar;
+  chip.querySelector('.nm').textContent = me.user.name;
+  $('#meAdmin').classList.toggle('hidden', me.user.role !== 'admin');
+  $('#level').value = settings.level;
+  $('#tone').value = settings.tone;
+  $('#lengths').querySelectorAll('button').forEach(b => b.classList.toggle('on', +b.dataset.min === +settings.minutes));
+  $('#ccBtn').classList.toggle('on', !!settings.captions);
+  try { config = await api('config'); } catch {}
   warmLines();
-  wire();
   route();
+}
+
+function wireAccount() {
+  $('#meChip').onclick = e => { e.stopPropagation(); $('#meMenu').classList.toggle('hidden'); };
+  document.addEventListener('click', () => $('#meMenu').classList.add('hidden'));
+  $('#meSwitch').onclick = async () => {
+    player.stop();
+    await api('logout', {});
+    history.pushState({}, '', '/');
+    account.showPicker();
+  };
+  $('#meAdmin').onclick = async () => {
+    show('admin');
+    $('#adminLessons').replaceChildren();
+    try { await account.renderUsers(); } catch { goHome(); }
+  };
+  $('#adminBack').onclick = goHome;
+}
+
+(async function init() {
+  wire();
+  wireAccount();
+  let state;
+  try { state = await api('me'); } catch { state = {}; }
+  if (state.setup) return account.showSetup();
+  if (!state.user) return account.showPicker();
+  signedIn();
 })();

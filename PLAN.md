@@ -80,10 +80,80 @@ Browser (public/)                          server.js                      extern
 5. **Content screening is serial** (screen, then generate), so refused requests never reach Opus.
    Sonnet screens (Haiku was inconsistent).
 
+## V1.5: profiles, sign-in and per-learner policies (planned 2026-10-03)
+Needed before learning profiles: the app will move to the homelab and be used from several devices
+(including an Android tablet) over Tailscale, by several learners of different ages.
+
+**Decisions (from interview)**
+- Runs on the homelab, reached over Tailscale from devices at home. Served over HTTPS with
+  `tailscale serve` (browsers only allow the microphone on secure pages). Installable as a PWA so
+  the tablet gets an app icon and full-screen view.
+- Sign-in with **PINs, no Google**: a "who's learning?" profile picker. Admin has an alphanumeric
+  password; learner PINs are optional and set by the admin per learner.
+- Sessions: learners stay signed in on a device until they switch profile; admin mode expires
+  after ~30 min idle and re-asks for the password.
+- Age bands: **Under 8 / 8–12 / 13–17 / Adult**.
+- Existing lessons are discarded when profiles ship.
+
+**Roles (authz)**
+- **Admin**: everything below, plus their own lessons as a learner.
+- **Learner**: their own lessons, questions and quizzes; voice/speed settings only.
+- Enforced server-side on every request (API, lesson files and audio), not just hidden in the UI.
+
+**Accounts & sessions**
+- `data/` (gitignored): `users.json` (id, name, avatar emoji, role, age band, notes, PIN/password
+  hash, per-user settings), `secret` (cookie signing key), `policies/`, `profiles/`, `log.jsonl`.
+- PINs/passwords hashed with Node's built-in `scrypt` (per-user salt). Lockout after repeated wrong
+  attempts (e.g. 5 tries → 5 min, doubling).
+- Signed, httpOnly, secure cookie for the learner session; a separate short-lived admin cookie
+  (sliding 30 min).
+- First run: no users → "create the admin" screen.
+- Lessons gain an `owner`; the library, lesson files, audio, questions and quizzes are scoped to it.
+
+**Content policies**
+- `data/policies/master.txt`: applies to everyone (weapons, drugs, explicit content...).
+- `data/policies/<band>.txt`: one per age band (Adult may be empty).
+- Optional per-learner **notes** ("loves dinosaurs, scared of spiders"), set by the admin.
+- Screening and every lesson prompt use master + the learner's band + notes. Replaces today's
+  single `content-policy.txt` (migrated into master + bands).
+- Refusals are logged per learner for the admin to see.
+
+**Learning profiles**
+- `data/profiles/<user>.md`: a plain-English style guide per learner (pace, drawing vs talking,
+  analogies, depth, humor, interests, what's been learned).
+- After each lesson, a background `claude -p` call (Sonnet) updates it from that lesson's feedback,
+  quiz result and questions asked. A section the admin writes is kept verbatim.
+- Included in the learner's lesson prompts. Admin can view and edit it.
+
+**Admin pages**
+- Users: add/edit learners (name, avatar, age band, PIN, notes), reset PINs.
+- Policies: edit master and band policies.
+- History per learner: lessons, questions asked, refusals, quiz scores, feedback.
+- Profile: view/edit each learner's learning profile.
+
+**Build order**
+1. Accounts & sessions: users store, setup screen, profile picker, PINs, cookies, authz on every
+   endpoint, lesson ownership; discard old lessons.
+2. Policies: master + age bands + notes; migration from `content-policy.txt`; refusal log.
+3. Admin pages: users, policies, history.
+4. Learning profiles: auto-update after lessons, used in prompts, admin view/edit.
+5. Homelab: `tailscale serve` HTTPS, run as a service, PWA manifest + icon, setup notes.
+
 ## Next (polish)
 - **Faster start**: stream part 1 so playback begins within seconds instead of 30-60s.
 - **Layout safety net**: renderer-side bounds clamping / overlap nudging, without constraining the model.
 - **Library**: search, export/share a lesson.
+- **Kokoro TTS fallback** (ElevenLabs is expensive). Use Kokoro (82M-parameter open TTS) when
+  ElevenLabs is unreachable or errors (e.g. out of credits), or when chosen in settings.
+  - In-browser option: `kokoro-js` (transformers.js) loaded as an ES module from a CDN; WebGPU where
+    available, WASM otherwise. Model download (~80–300 MB depending on quantization) cached by the
+    browser. Worth checking speed on the Android tablet.
+  - Homelab option: run Kokoro server-side (e.g. Kokoro-FastAPI), which can return word timestamps;
+    likely faster and steadier than in-browser on a tablet.
+  - Kokoro has no `[audio tags]`: strip cues before speaking. Without timestamps, `at` sync falls
+    back to the estimate already used for browser voices.
+  - Server should report ElevenLabs failures (402/401/quota) so the client switches for the rest of
+    the session and says so quietly in settings.
 
 ## V2
 - **Learning style profile.** Turn post-lesson feedback (already collected) into a per-learner
