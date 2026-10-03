@@ -54,8 +54,8 @@ See `PLAN.md` for status, decisions and roadmap.
 - Client levels loudness with a Web Audio compressor. Browser Web Speech is the fallback.
 - Spoken questions: browser MediaRecorder → `POST /api/stt` (raw audio) → ElevenLabs Scribe (`scribe_v2`).
   🎤 buttons auto-stop after silence; hold A is push-to-talk (also in the empty home question box).
-- Secrets: `ELEVENLABS_API_KEY`, or a 1Password reference read with `op read` at startup
-  (set `ELEVENLABS_API_KEY_OP_REF`; needs `OP_SERVICE_ACCOUNT_TOKEN`).
+- Secrets: `ELEVENLABS_API_KEY`, or `ELEVENLABS_API_KEY_OP_REF` (a 1Password reference read with
+  `op read` at startup; needs `OP_SERVICE_ACCOUNT_TOKEN`). Both go in `.env` (gitignored).
 
 ## Content policies
 - `data/policies/master.txt` (everyone) + one per age band (`under8`, `8-12`, `13-17`, `adult`), seeded
