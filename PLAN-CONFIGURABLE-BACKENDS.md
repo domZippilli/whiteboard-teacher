@@ -1,115 +1,142 @@
 # Plan: configurable backends
 
-Status: proposal (2026-10-03). Not started.
+Status: planned (2026-10-03). Not started.
 
 ## Goal
-Let the admin choose, for the whole server, which service does each job:
+Let the admin choose, for the whole server, which service does each job: writing lessons, screening
+and profiles, voice, and listening. Learners then choose among the voices the admin has enabled.
 
-| Job | Today | Why change |
+The backends are **categories of standard APIs**, not products. A product like Kokoro, Ollama or
+Whisper is used through whichever standard API it speaks, so supporting one API supports many
+products.
+
+## Concepts
+- **Backend type**: a protocol the server knows how to speak (e.g. "OpenAI-compatible speech").
+- **Backend**: a configured instance of a type: name, base URL, model, credentials, limits.
+  The admin can have several of the same type (e.g. a lab server and OpenRouter).
+- **Job**: what the app needs done. Each job has an ordered list of backends: the first healthy
+  one is used, the rest are fallbacks.
+
+| Job | Used for | Today |
 |---|---|---|
-| **Lessons** (writing scripts, answers, quizzes) | `claude -p`, Opus | Use the API directly, a cheaper model, or a local model on the homelab |
-| **Screening & profiles** (content checks, learning-profile updates) | `claude -p`, Sonnet | Same, independently: a small fast model is enough |
-| **Voice** (text to speech) | ElevenLabs v3 | ElevenLabs is expensive; Kokoro is free and local |
-| **Listening** (speech to text) | ElevenLabs Scribe | A local Whisper server, or the browser |
+| `lessons` | outlines, parts, answers, quizzes | `claude -p`, Opus |
+| `utility` | content screening, learning-profile updates | `claude -p`, Sonnet |
+| `voice` | speech for lessons and the teacher's lines | ElevenLabs v3 |
+| `listening` | spoken questions | ElevenLabs Scribe |
 
-Server-wide and admin-only for now. Per-learner choices can come later.
+## Backend types
 
-## Backends
+### Text (jobs: `lessons`, `utility`)
+| Type | Speaks | Covers |
+|---|---|---|
+| `claude-cli` | the `claude` CLI (`-p`, sessions) | Claude via the signed-in account; no key (today's backend) |
+| `anthropic-messages` | Anthropic Messages API | Anthropic, and servers that offer an Anthropic-compatible endpoint |
+| `openai-chat` | OpenAI Chat Completions (`/v1/chat/completions`) | Ollama, LM Studio, vLLM, llama.cpp server, LocalAI, OpenRouter, LiteLLM, OpenAI |
 
-**Lessons / screening / profiles (LLM)**
-- `claude-cli` (current): `claude -p` with one Claude Code session per lesson. No API key; uses the
-  signed-in Claude account.
-- `anthropic`: Messages API with an API key. Conversation kept in `lesson.json` instead of a CLI
-  session. Prompt caching for the big system prompt.
-- `openai-compatible`: any `/v1/chat/completions` server: Ollama, LM Studio, vLLM, llama.cpp,
-  OpenRouter. Base URL + model + optional key. JSON mode where supported.
+Settings: base URL, model, key (optional), max tokens, JSON mode on/off, timeout.
 
-**Voice (TTS)**
-- `elevenlabs` (current): best quality, `[audio tags]`, per-character timings.
-- `kokoro-server`: Kokoro-FastAPI on the homelab (OpenAI-style `/v1/audio/speech`; its captioned
-  endpoint returns word timings). Free, fast on a GPU or a decent CPU.
-- `kokoro-browser`: `kokoro-js` (transformers.js) running in the learner's browser. No server cost;
-  first use downloads the model (~80–300 MB). Speed on the tablet unknown.
-- `openai-compatible`: any `/v1/audio/speech` server (OpenAI, others).
-- `browser`: Web Speech, the zero-setup fallback that exists today.
+### Voice (job: `voice`)
+| Type | Speaks | Covers |
+|---|---|---|
+| `elevenlabs` | ElevenLabs TTS API | ElevenLabs (audio tags, per-character timings) |
+| `openai-speech` | OpenAI Speech (`/v1/audio/speech`) | Kokoro via Kokoro-FastAPI, Speaches, LocalAI, OpenAI TTS, others |
+| `browser-model` | runs a TTS model in the learner's browser (transformers.js) | Kokoro (`kokoro-js`) first; others later |
+| `browser-speech` | Web Speech API | the device's own voices (zero setup; today's fallback) |
 
-**Listening (STT)**
-- `elevenlabs` (current), `openai-compatible` (`/v1/audio/transcriptions`: OpenAI, faster-whisper,
-  whisper.cpp server), `browser` (Web Speech recognition: Chrome/Android only, sends audio to Google).
+Settings: base URL / model / key (server types), concurrency, and the **voice catalog** (below).
+Capabilities differ, so each type declares them: `timings` (word/char timings for drawing sync),
+`audioTags` (understands `[excited]` etc.), `runsIn` (`server` or `browser`).
 
-## Fallbacks
-Each job has an ordered list, e.g. voice: `elevenlabs → kokoro-server → browser`.
-- On quota/auth errors (401/402/429 with "quota"), connection failures and timeouts, the server marks
-  that backend unhealthy for a while (e.g. 10 min, longer for quota) and moves to the next one.
-- Mid-lesson switches are fine for voice (each paragraph is separate) but the client must handle a
-  paragraph without timings (estimate, as for the browser voice today).
-- For lessons, a switch mid-lesson starts a fresh conversation seeded with the script so far.
-- The admin page shows each backend's health and the last error.
+### Listening (job: `listening`)
+| Type | Speaks | Covers |
+|---|---|---|
+| `elevenlabs-stt` | ElevenLabs Scribe | today's backend |
+| `openai-transcribe` | OpenAI Transcriptions (`/v1/audio/transcriptions`) | faster-whisper (Speaches), whisper.cpp server, LocalAI, OpenAI |
+| `browser-recognition` | Web Speech recognition | Chrome/Android (sends audio to Google; no Safari/Firefox) |
+
+## Voice catalog (admin) and voice choice (learners)
+- For each voice backend the admin sees the voices it offers (from the backend, e.g. Kokoro's ~50;
+  or typed in for APIs that can't list them), **enables** the ones learners may use, and gives each
+  a friendly name ("Justin", "Bella", "Emma (British)"). One enabled voice is the backend's default.
+- Learners pick from all enabled voices of all backends in the voice job, with a preview. Their
+  choice is stored as `{ backend, voice }`.
+- If their backend becomes unavailable, they hear the next backend's default voice for that
+  paragraph; their choice is kept.
+- The teacher's own lines ("Hmm…", "Any questions?") use the learner's voice too.
+
+## Fallbacks and health
+- Each job uses the first healthy backend in its list.
+- Errors that mean "this backend can't serve now" (auth or quota errors such as 401/402/429 with a
+  quota message, connection refused, timeouts) mark it unhealthy for a cooling-off period (10 min;
+  1 h for quota). Other errors are retried once.
+- Voice can switch per paragraph. Lessons switch only between requests; a lesson that moves to a
+  different text backend mid-way continues with the script so far as context.
+- Admin › Backends shows each backend's health, last error and a **Test** button.
 
 ## Design
 
-### Provider interfaces (server)
-`backends/llm/*.js`, `backends/tts/*.js`, `backends/stt/*.js`, each exporting the same shape:
-
+### Provider interfaces (server, `backends/`)
 ```js
-// LLM
-{ capabilities: { sessions, json },
-  start({ system, prompt })              → { convo, text }   // convo: opaque handle stored in lesson.json
-  continue({ convo, system, prompt })    → { convo, text }
-  fork({ convo, system, prompt })        → { convo, text }   // asides and quizzes
-  once({ system, prompt, model })        → text }            // screening, profile updates
+// Text
+{ capabilities: { conversations, json },
+  start({ system, prompt })            → { convo, text }   // convo: opaque, stored in lesson.json
+  continue({ convo, system, prompt })  → { convo, text }
+  fork({ convo, system, prompt })      → { convo, text }   // asides, quizzes
+  once({ system, prompt })             → text }            // screening, profile updates
 
-// TTS
-{ capabilities: { timings, audioTags, maxConcurrency },
-  voices()                               → [{ id, name }]
-  speak({ text, voice })                 → { audio: Buffer, mime, timing?: { chars, starts, duration } } }
+// Voice (server-side types)
+{ capabilities: { timings, audioTags, runsIn: 'server' },
+  voices()                             → [{ id, name, lang }]
+  speak({ text, voice })               → { audio, mime, timing? } }
 
-// STT
-{ transcribe({ audio: Buffer, mime })    → text }
+// Listening
+{ transcribe({ audio, mime })          → text }
 ```
+- `claude-cli` keeps a session id as `convo`. The HTTP types keep the message list in `lesson.json`
+  (`lesson.convo`); `fork` copies it.
+- Browser types (`browser-model`, `browser-speech`, `browser-recognition`) have small client modules
+  with the same shape; the server tells the client which backend and voice to use.
+- `[audio tags]` are stripped when the voice has no `audioTags`. `SCRIPT_API.md` mentions cues only
+  when the default voice backend supports them.
+- When a voice gives no timings, drawing sync falls back to the estimate already used today.
 
-- `claude-cli` maps `convo` to a session id (`--resume`, `--fork-session`). API backends keep the
-  message list in `lesson.json` (`lesson.convo`), and `fork` copies it.
-- `[audio tags]` are stripped before `speak()` when `audioTags` is false; `SCRIPT_API.md` mentions
-  cues only when the active voice supports them.
-- `kokoro-browser` is special: the server returns "speak this in the browser" and the client runs
-  the model, like the Web Speech path today.
+### In-browser models (`browser-model`, first: Kokoro)
+- `kokoro-js` loaded as an ES module from a CDN (no bundler). WebGPU where available, WASM
+  otherwise; quantization chosen by the admin (q8 default; fp32 for quality on strong devices).
+- The model (~80–300 MB) downloads once and is cached by the browser. First use shows a progress bar.
+- Generation runs in a Web Worker so the board stays smooth. Paragraphs are generated ahead, as
+  with server voices today.
+- No server cost and no server cache (audio is made on each device each time). Kokoro has no
+  timings, so drawings use the estimate.
+- Unknown: speed on the Android tablet. If too slow there, the admin can put an `openai-speech`
+  Kokoro server (Kokoro-FastAPI) ahead of it in the list.
 
 ### Configuration
-- `data/config.json` (gitignored, 0600), edited in **Admin › Backends**. For each job: the backend
-  order and per-backend settings (base URL, model, voice list, concurrency).
-- Secrets: an API key can be typed in (stored in `config.json`, never sent back to the browser:
-  shown as `••••1234`), or given as an env var name or a 1Password reference (`op://…`).
-- Env vars and `.env` stay as the defaults, so today's setup keeps working with no config file.
-- A **Test** button per backend: a tiny request (one sentence of speech, a short completion) with
-  the result or error shown.
-
-### Voices
-- The voice list in Settings comes from the active voice backend; each voice has a friendly first
-  name (e.g. Justin, Alexander for ElevenLabs; picks from Kokoro's voices).
-- A learner's saved voice is `{ backend, id }`. If the backend changes, they get that backend's
-  default voice until they pick another.
-- TTS cache key includes the backend and model, so switching never plays the wrong cached audio.
+- `data/config.json` (gitignored, 0600), edited in **Admin › Backends**: backends (type + settings),
+  the ordered list per job, voice catalogs.
+- Secrets: typed in (stored server-side, shown as `••••1234`, never sent to browsers), or an env var
+  name, or a 1Password reference (`op://…`).
+- No config file = today's behaviour from `.env` (claude-cli, ElevenLabs, browser fallback).
+- Speech cache key = backend + model + voice + text.
 
 ### Lesson quality on other models
-- The script format is demanding (long JSON, coordinates, timing). Smaller local models may draw
-  poorly or break JSON. Mitigations: JSON mode / response_format where available, the existing
-  retry, and a per-job model choice so the admin can keep a strong model for lessons and use a
-  small one for screening.
-- Keep one prompt for all backends; no per-model forks of SCRIPT_API.md unless testing shows a need.
+The script format is demanding (long JSON, coordinates, timing). Smaller models may draw poorly or
+break JSON. Mitigations: JSON mode where the API has it, the existing retry, and separate `lessons`
+and `utility` jobs so a strong model can write lessons while a small one screens. One prompt for all
+backends unless testing shows a need for more.
 
 ## Steps
-1. Refactor: move today's code behind the interfaces (`claude-cli`, `elevenlabs`, `browser`) with
-   no behaviour change. Config loader with env defaults.
-2. Voice: `kokoro-server`, then `openai-compatible`, fallback chain + health, client handling of
-   missing timings and cues.
-3. Admin › Backends page: choose order, settings, secrets, Test buttons, health.
-4. LLM: `anthropic`, then `openai-compatible`, conversation storage in `lesson.json`.
-5. Listening: `openai-compatible` (Whisper), `browser`.
-6. `kokoro-browser` (optional; only if the tablet runs it well).
+1. **Refactor** today's code behind the interfaces (`claude-cli`, `elevenlabs`, `elevenlabs-stt`,
+   `browser-speech`), config loader with `.env` defaults. No behaviour change.
+2. **Voice catalog and learner choice**: admin enables/names voices per backend; learners pick.
+3. **`browser-model` voice with Kokoro**: worker, model download, settings, fallback rules.
+4. **Admin › Backends**: add/edit backends, order per job, secrets, Test, health.
+5. **`openai-chat` and `anthropic-messages`** text backends (for the lab model), conversation storage.
+6. **`openai-speech`** voice (Kokoro-FastAPI etc.) and **`openai-transcribe`** listening.
+7. **`browser-recognition`** listening (optional).
 
 ## Open questions
-- Which backends first? Proposed: Kokoro (server) for voice, since cost is the main driver.
-- Run Kokoro on the homelab (needs a container) or in the browser?
-- Any local LLM in mind (Ollama + which model), or is `anthropic` API the main alternative to the CLI?
-- Should learners ever pick the voice backend (e.g. "fancy voice" vs "free voice"), or admin only?
+- The lab model: which server software (Ollama, vLLM, LM Studio, llama.cpp…) and which model? That
+  decides whether `openai-chat` alone is enough to start.
+- Should screening fall back to "refuse when unsure" if every `utility` backend is down, or let
+  requests through? (Proposed: refuse kindly and say the teacher is unavailable.)
