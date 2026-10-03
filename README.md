@@ -63,3 +63,7 @@ Git does not track these folders.
 
 - `docs/SCRIPT_API.md` gives the format of a lesson script.
 - `PLAN.md` gives the status and the next tasks.
+
+## License
+
+MIT. See `LICENSE`.
