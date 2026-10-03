@@ -52,6 +52,7 @@ Capabilities differ, so each type declares them: `timings` (word/char timings fo
 |---|---|---|
 | `elevenlabs-stt` | ElevenLabs Scribe | today's backend |
 | `openai-transcribe` | OpenAI Transcriptions (`/v1/audio/transcriptions`) | faster-whisper (Speaches), whisper.cpp server, LocalAI, OpenAI |
+| `browser-transcribe` ✅ | runs a speech-recognition model in the learner's browser (transformers.js) | Moonshine (default; ~63 MB q8; a question transcribes in ~0.1–0.2 s on a Mac), Whisper tiny/base |
 | `browser-recognition` | Web Speech recognition | Chrome/Android (sends audio to Google; no Safari/Firefox) |
 
 ## Voice catalog (admin) and voice choice (learners)

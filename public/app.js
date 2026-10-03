@@ -103,10 +103,52 @@ function browserSpeech(text, spec) {
     voiceWorker.postMessage({ type: 'speak', id, spec, text });
   });
 }
-function voiceProgress(frac) {
+// One pill for both in-browser models' first downloads.
+const downloads = {};
+function voiceProgress(frac, what = 'voice') {
+  if (frac === null) delete downloads[what]; else downloads[what] = frac;
   const el = $('#voiceLoading');
-  el.classList.toggle('hidden', frac === null);
-  if (frac !== null) el.textContent = `Getting the voice ready… ${Math.round(frac * 100)}%`;
+  const active = Object.entries(downloads);
+  el.classList.toggle('hidden', !active.length);
+  if (active.length) el.textContent = active.map(([w, f]) => `Getting the ${w === 'voice' ? 'voice' : 'ears'} ready… ${Math.round(f * 100)}%`).join(' · ');
+}
+
+// ---------- in-browser speech recognition (listen-worker.js) ----------
+let listenWorker = null;
+const listenJobs = new Map();
+function listenWorkerFor() {
+  if (listenWorker) return listenWorker;
+  listenWorker = new Worker('/listen-worker.js', { type: 'module' });
+  listenWorker.onmessage = ({ data }) => {
+    if (data.type === 'progress') return voiceProgress(data.loaded / data.total, 'ears');
+    if (data.type === 'ready') return voiceProgress(null, 'ears');
+    const job = listenJobs.get(data.id);
+    if (!job) return;
+    listenJobs.delete(data.id);
+    if (data.type === 'text') job.resolve(data.text);
+    else { voiceProgress(null, 'ears'); job.reject(new Error(data.message)); }
+  };
+  listenWorker.onerror = e => { voiceProgress(null, 'ears'); for (const j of listenJobs.values()) j.reject(new Error(e.message || 'speech recognition failed')); listenJobs.clear(); };
+  return listenWorker;
+}
+// Download the model in the background so the first question isn't slow.
+function preloadListening() {
+  if (config.listenInBrowser) listenWorkerFor().postMessage({ type: 'load', spec: config.listenInBrowser });
+}
+// Recorded audio (webm/mp4) → 16 kHz mono samples → text.
+async function browserTranscribe(blob, spec) {
+  const decoded = await new AudioContext().decodeAudioData(await blob.arrayBuffer());
+  const off = new OfflineAudioContext(1, Math.max(1, Math.ceil(decoded.duration * 16000)), 16000);
+  const src = off.createBufferSource();
+  src.buffer = decoded;
+  src.connect(off.destination);
+  src.start();
+  const audio = (await off.startRendering()).getChannelData(0);
+  const id = crypto.randomUUID();
+  return new Promise((resolve, reject) => {
+    listenJobs.set(id, { resolve, reject });
+    listenWorkerFor().postMessage({ type: 'transcribe', id, spec, audio }, [audio.buffer]);
+  });
 }
 
 // [audio tags] are delivery cues for the voice model, never shown or spoken by the browser voice.
@@ -224,9 +266,15 @@ async function startRecording({ btn, input, autoStop = true }, onText) {
     input.placeholder = 'Transcribing…';
     try {
       const blob = new Blob(chunks, { type: rec.mimeType || 'audio/webm' });
-      const res = await fetch('/api/stt', { method: 'POST', headers: { 'content-type': blob.type }, body: blob });
-      const { text, error } = await res.json();
-      if (error) throw new Error(error);
+      let text;
+      if (config.listenInBrowser) {
+        text = await browserTranscribe(blob, config.listenInBrowser);
+      } else {
+        const res = await fetch('/api/stt', { method: 'POST', headers: { 'content-type': blob.type }, body: blob });
+        const out = await res.json();
+        if (out.error) throw new Error(out.error);
+        text = out.text;
+      }
       if (text) onText(text);
       else input.placeholder = "Heard no words; try again or type";
     } catch (e) {
@@ -604,7 +652,7 @@ class Player {
 }
 
 const player = new Player();
-window.wt = { player, speech }; // for debugging from the console
+window.wt = { player, speech, browserTranscribe: (...a) => browserTranscribe(...a) }; // for debugging from the console
 
 // ---------- UI ----------
 
@@ -1323,6 +1371,7 @@ async function signedIn() {
   $('#ccBtn').classList.toggle('on', !!settings.captions);
   try { config = await api('config'); } catch {}
   applyListening();
+  setTimeout(preloadListening, 3000);
   warmLines();
   route();
 }
@@ -1342,7 +1391,7 @@ function wireAccount() {
     try {
       await account.renderUsers();
       // Backend changes can change the voices and the mic: refresh those after saving.
-      await account.renderBackends({ onSaved: async () => { config = await api('config'); applyListening(); ttsCache.clear(); account.renderVoices(); } });
+      await account.renderBackends({ onSaved: async () => { config = await api('config'); applyListening(); preloadListening(); ttsCache.clear(); account.renderVoices(); } });
       await account.renderVoices();
       await account.renderPolicies();
     } catch { goHome(); }

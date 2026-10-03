@@ -15,8 +15,9 @@ import * as claudeCli from './text/claude-cli.js';
 import * as elevenlabs from './voice/elevenlabs.js';
 import * as elevenlabsStt from './listening/elevenlabs-stt.js';
 import * as browserModel from './voice/browser-model.js';
+import * as browserTranscribe from './listening/browser-transcribe.js';
 
-const TYPES = Object.fromEntries([claudeCli, elevenlabs, elevenlabsStt, browserModel].map(m => [m.type, m]));
+const TYPES = Object.fromEntries([claudeCli, elevenlabs, elevenlabsStt, browserModel, browserTranscribe].map(m => [m.type, m]));
 export const JOBS = ['lessons', 'utility', 'voice', 'listening'];
 // Which kind of backend each job takes.
 const JOB_KIND = { lessons: 'text', utility: 'text', voice: 'voice', listening: 'listening' };
@@ -199,6 +200,8 @@ export function loadBackends({ dataDir, env, opRead, defaults }) {
           if (b.capabilities.runsIn === 'browser') return { ok: true, browser: b.clientSpec(b.defaultVoice), ms: 0 };
           const r = await b.speak({ text: 'Testing, one, two, three.', voice: catalogFor(b).default || b.defaultVoice });
           result = { audio: `data:${r.mime};base64,${r.audio.toString('base64')}` };
+        } else if (b.capabilities?.runsIn === 'browser') {
+          return { ok: true, browserListening: b.clientSpec(), ms: 0, message: 'Runs in the browser: try the mic to test it' };
         } else {
           // Half a second of silence: checks the key and the service, expects no words back.
           const wav = silentWav(0.5);

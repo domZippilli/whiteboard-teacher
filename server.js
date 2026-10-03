@@ -627,6 +627,8 @@ Return: {"steps":[...]}`,
       voice: backends.defaultVoice(),
       audioTags: !!v?.capabilities.audioTags,
       listening: !!backends.first('listening'), // false → no mic buttons
+      // When the first working listening backend runs in the browser: which model to run there.
+      listenInBrowser: backends.first('listening')?.capabilities?.runsIn === 'browser' ? backends.first('listening').clientSpec() : null,
     };
   },
 
@@ -720,16 +722,25 @@ function sendFile(res, file) {
   });
 }
 
-// Speech-to-text for spoken questions: raw recorded audio in, { text } out (the `listening` backend).
+// Speech-to-text for spoken questions: raw recorded audio in, { text } out. Tries the server-side
+// listening backends in order (in-browser ones are handled by the client and skipped here).
 async function transcribe(req, res) {
   const chunks = [];
   for await (const c of req) chunks.push(c);
   const mime = req.headers['content-type'] || 'audio/webm';
   const audio = Buffer.concat(chunks);
-  const text = await backendFor('listening').transcribe({ audio, mime });
-  console.log(`stt: ${audio.length} bytes ${mime} -> "${text.slice(0, 80)}"`);
-  res.writeHead(200, { 'content-type': 'application/json' });
-  res.end(JSON.stringify({ text }));
+  for (const b of backends.jobs.listening) {
+    if (b.capabilities?.runsIn === 'browser' || !backends.healthy(b)) continue;
+    try {
+      const text = await b.transcribe({ audio, mime });
+      console.log(`stt (${b.id}): ${audio.length} bytes ${mime} -> "${text.slice(0, 80)}"`);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ text }));
+    } catch (e) {
+      backends.markFailed(b, e);
+    }
+  }
+  throw Object.assign(new Error("Listening isn't available right now; please type your question."), { status: 503 });
 }
 
 const PUBLIC_API = new Set(['GET me', 'GET profiles', 'POST setup', 'POST login', 'POST logout']);
@@ -751,7 +762,7 @@ http.createServer(async (req, res) => {
       if (name.includes(' admin/') && !admin) return json(res, 403, { error: 'Admin password needed', elevate: user.role === 'admin' });
     }
     if (name === 'POST stt') {
-      return transcribe(req, res).catch(e => { console.error(e); json(res, 500, { error: e.message }); });
+      return transcribe(req, res).catch(e => { if (!e.status) console.error(e); json(res, e.status || 500, { error: e.message }); });
     }
     const fn = api[name];
     if (!fn) { res.writeHead(404); return res.end(); }

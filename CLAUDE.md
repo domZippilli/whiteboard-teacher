@@ -41,6 +41,10 @@ See `PLAN.md` for status, decisions and roadmap.
   the form), and the ordered list per job. Secrets: typed, `$ENV_VAR` or `op://…`; stored as given
   (references, not values) and never sent to the browser (masked). `backends.update()` rebuilds
   without a restart; `backends.test(id)` makes a tiny real request. No `listening` backend → no mic.
+- `browser-transcribe` (listening): Moonshine/Whisper via transformers.js in `public/listen-worker.js`.
+  `GET config` gives `listenInBrowser` (model spec) when it's the first working listening backend; the
+  client converts the recording to 16 kHz and transcribes locally; the model preloads after sign-in.
+  Server-side listening backends are tried in order with health marking (`transcribe()` in server.js).
 - Voice catalog: `data/voices.json` (per voice backend: enabled `{ id, name }` + default), edited in
   Admin › Voices; without an entry a backend offers its configured voices. Learners pick from
   `GET voices`; a choice is `"backendId:voiceId"` (older settings: bare id). `resolveVoice()` falls
