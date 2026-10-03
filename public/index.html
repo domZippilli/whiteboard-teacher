@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ask Claude</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Patrick+Hand&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <!-- Home -->
+  <main id="home" class="screen">
+    <button class="icon-btn settings-btn" id="openSettings" title="Settings">⚙</button>
+    <div class="home-inner">
+      <h1 class="teacher-name"><span id="teacherName">Claude</span></h1>
+      <form id="askForm" class="ask">
+        <input id="q" autocomplete="off" autofocus placeholder="What would you like to learn about?">
+        <button type="submit">Teach me</button>
+      </form>
+      <div class="options">
+        <div class="chips" id="lengths" role="radiogroup" aria-label="Lesson length">
+          <button type="button" data-min="3">3 min</button>
+          <button type="button" data-min="5">5 min</button>
+          <button type="button" data-min="10">10 min</button>
+          <button type="button" data-min="30">30 min</button>
+          <button type="button" data-min="60">60 min</button>
+        </div>
+        <select id="level" aria-label="Audience">
+          <option value="">Any level</option>
+          <option value="curious child (age ~10)">For a kid</option>
+          <option value="high-school student">High school</option>
+          <option value="curious adult with no background">General adult</option>
+          <option value="university student">University</option>
+          <option value="expert who wants depth and rigor">Expert</option>
+        </select>
+      </div>
+      <section id="library" class="library"></section>
+    </div>
+  </main>
+
+  <!-- Lesson -->
+  <main id="lesson" class="screen hidden">
+    <header class="topbar">
+      <button class="icon-btn" id="homeBtn" title="Home">←</button>
+      <div class="title" id="lessonTitle"></div>
+      <div class="status" id="status"></div>
+    </header>
+    <div class="stage">
+      <svg id="board"></svg>
+      <div id="prep" class="prep hidden">
+        <div class="prep-card">
+          <div class="spinner"></div>
+          <div id="prepText">Preparing your lesson…</div>
+          <ol id="prepOutline"></ol>
+        </div>
+      </div>
+      <div id="start" class="prep hidden">
+        <div class="prep-card start-card">
+          <div id="startTitle" class="start-title"></div>
+          <div class="row center">
+            <button type="button" id="startGo">▶ Resume</button>
+            <button type="button" id="startOver" class="ghost">Start from the beginning</button>
+          </div>
+        </div>
+      </div>
+      <div id="caption" class="caption hidden"></div>
+      <div id="handBox" class="hand hidden">
+        <form id="handForm">
+          <input id="handQ" autocomplete="off" placeholder="What's your question?">
+          <button type="submit">Ask</button>
+          <button type="button" id="handCancel" class="ghost">Never mind</button>
+        </form>
+      </div>
+      <div id="feedback" class="feedback hidden">
+        <h2>How was that lesson?</h2>
+        <div class="thumbs">
+          <button type="button" data-liked="true">👍 Liked it</button>
+          <button type="button" data-liked="false">👎 Not really</button>
+        </div>
+        <textarea id="fbText" rows="3" placeholder="What worked? What didn't? (pace, drawings, depth, examples, voice…)"></textarea>
+        <div class="row">
+          <button type="button" id="fbSend">Send</button>
+          <button type="button" id="fbReplay" class="ghost">Replay</button>
+          <button type="button" id="fbHome" class="ghost">New question</button>
+        </div>
+      </div>
+    </div>
+    <footer class="controls">
+      <button class="icon-btn" id="prevBtn" title="Previous step (←)">⏮</button>
+      <button class="icon-btn big" id="playBtn" title="Play / pause (space)">⏸</button>
+      <button class="icon-btn" id="nextBtn" title="Next step (→)">⏭</button>
+      <div class="timeline" id="timeline"></div>
+      <button class="hand-btn" id="handBtn" title="Ask a question (?)">✋ Ask</button>
+      <button class="icon-btn" id="ccBtn" title="Captions (c)">CC</button>
+    </footer>
+  </main>
+
+  <!-- Settings -->
+  <dialog id="settings">
+    <form method="dialog">
+      <h2>Settings</h2>
+      <label>Teacher's name <input id="sName"></label>
+      <label>Voice <select id="sVoice"></select></label>
+      <label>Speed <input id="sRate" type="range" min="0.75" max="1.5" step="0.05"> <span id="sRateVal"></span></label>
+      <label>Model
+        <select id="sModel">
+          <option value="opus">Opus (best lessons)</option>
+          <option value="sonnet">Sonnet (faster)</option>
+        </select>
+      </label>
+      <p class="hint">Tip: set this page as your home page, or add a browser search engine with the URL
+        <code id="searchUrl"></code></p>
+      <div class="row"><button value="ok">Done</button></div>
+    </form>
+  </dialog>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

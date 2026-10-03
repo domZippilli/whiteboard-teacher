@@ -1,0 +1,22 @@
+<!doctype html>
+<!-- Dev page: renders a saved lesson's steps (animated, sped up) with no audio, for checking drawings.
+     /dev/board.html?lesson=<id>&section=0&upto=6&speed=8   (upto = number of steps to draw) -->
+<meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Patrick+Hand&display=swap" rel="stylesheet">
+<style>body{margin:0;background:#ddd} svg{width:1600px;height:900px;background:#fdfdfb;display:block}</style>
+<svg id="board"></svg>
+<script type="module">
+import { Board } from '/board.js';
+const p = new URLSearchParams(location.search);
+const lesson = await (await fetch('/api/lesson?id=' + p.get('lesson'))).json();
+const steps = lesson.sections[+p.get('section') || 0].steps;
+const board = new Board(document.querySelector('#board'));
+board.speed = +p.get('speed') || 8;
+const upto = +p.get('upto') || steps.length;
+await document.fonts.ready;
+for (const st of steps.slice(0, upto)) for (const op of st.draw || []) {
+  if (op.op === 'pause') continue;
+  await board.run(op, p.get('instant') === '1');
+}
+document.title = 'done';
+</script>
