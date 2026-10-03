@@ -1376,6 +1376,37 @@ async function signedIn() {
   route();
 }
 
+// Admin section nav: smooth-scroll to a section, and highlight the one in view.
+function wireAdminNav() {
+  const nav = $('#adminNav');
+  const links = [...nav.querySelectorAll('a')];
+  nav.onclick = e => {
+    const a = e.target.closest('a');
+    if (!a) return;
+    e.preventDefault();
+    $(a.getAttribute('href')).scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  const mark = () => {
+    // The last section whose top has passed a line near the top of the scroll area.
+    const line = $('#admin').getBoundingClientRect().top + 80;
+    let current = links[0];
+    for (const a of links) {
+      const sec = $(a.getAttribute('href'));
+      if (a.classList.contains('hidden') || !sec.childElementCount) continue;
+      if (sec.getBoundingClientRect().top <= line) current = a;
+    }
+    if (current.classList.contains('on')) return;
+    links.forEach(a => a.classList.toggle('on', a === current));
+    // Narrow screens: the nav is a horizontal bar; keep the active link in view.
+    if (nav.scrollWidth > nav.clientWidth) nav.scrollTo({ left: current.offsetLeft - 16, behavior: 'smooth' });
+  };
+  $('#admin').addEventListener('scroll', mark, { passive: true });
+  // History appears only while a learner's history is open.
+  new MutationObserver(() => { $('#navHistory').classList.toggle('hidden', !$('#adminHistory').childElementCount); mark(); })
+    .observe($('#adminHistory'), { childList: true });
+  mark();
+}
+
 function wireAccount() {
   $('#meChip').onclick = e => { e.stopPropagation(); $('#meMenu').classList.toggle('hidden'); };
   document.addEventListener('click', () => $('#meMenu').classList.add('hidden'));
@@ -1397,6 +1428,7 @@ function wireAccount() {
     } catch { goHome(); }
   };
   $('#adminBack').onclick = goHome;
+  wireAdminNav();
 }
 
 (async function init() {

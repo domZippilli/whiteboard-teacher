@@ -37,12 +37,21 @@
       <button class="icon-btn" id="adminBack" title="Home">←</button>
       <div class="title">Admin</div>
     </header>
+    <div class="admin-layout">
+    <nav class="admin-nav" id="adminNav" aria-label="Admin sections">
+      <a href="#adminUsers">People</a>
+      <a href="#adminHistory" class="hidden" id="navHistory">History</a>
+      <a href="#adminBackends">Backends</a>
+      <a href="#adminVoices">Voices</a>
+      <a href="#adminPolicies">Content rules</a>
+    </nav>
     <div class="admin-body">
       <section id="adminUsers"></section>
       <section id="adminHistory" class="history"></section>
       <section id="adminBackends" class="backends"></section>
       <section id="adminVoices" class="voices"></section>
       <section id="adminPolicies" class="policies"></section>
+    </div>
     </div>
   </main>
 

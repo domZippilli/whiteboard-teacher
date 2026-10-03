@@ -212,6 +212,21 @@ button.danger { color: #d23a2f !important; margin-left: auto; }
 /* Admin */
 #admin { overflow-y: auto; }
 .admin-body { width: min(820px, 100% - 32px); margin: 8px auto 40px; }
+/* Admin layout: section nav on the left (a sticky bar on top for narrow screens). */
+.admin-layout { display: grid; grid-template-columns: 180px minmax(0, 820px); justify-content: center; gap: 24px; padding: 0 16px; }
+.admin-layout .admin-body { width: auto; margin: 8px 0 40vh; }
+.admin-layout .admin-body > section { scroll-margin-top: 12px; }
+.admin-nav { position: sticky; top: 12px; align-self: start; display: flex; flex-direction: column; gap: 2px; margin-top: 16px; }
+.admin-nav a { color: var(--muted); text-decoration: none; padding: 7px 12px; border-radius: 8px; font-size: 15px; border-left: 3px solid transparent; }
+.admin-nav a:hover { color: var(--ink); background: var(--card); }
+.admin-nav a.on { color: var(--ink); font-weight: 600; border-left-color: var(--accent); background: var(--card); }
+@media (max-width: 760px) {
+  .admin-layout { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .admin-nav { flex-direction: row; overflow-x: auto; top: 0; z-index: 3; background: var(--bg); padding: 6px 0; margin: 0; }
+  .admin-nav a { border-left: 0; border-bottom: 3px solid transparent; white-space: nowrap; }
+  .admin-nav a.on { border-bottom-color: var(--accent); }
+  .admin-layout .admin-body > section { scroll-margin-top: 60px; }
+}
 .admin-head { display: flex; align-items: center; justify-content: space-between; }
 .admin-head h2 { font-family: 'Patrick Hand', cursive; font-weight: 400; font-size: 32px; margin: 8px 0; }
 .user-list { display: flex; flex-direction: column; gap: 6px; }
