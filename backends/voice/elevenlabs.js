@@ -1,5 +1,5 @@
 // Voice backend: ElevenLabs text-to-speech with per-character timings ("with-timestamps").
-// The v3 model understands [audio tags] like [excited] or [whispers].
+// v3 and v4 models understand [audio tags] like [excited] or [whispers].
 
 export const type = 'elevenlabs';
 
@@ -8,7 +8,7 @@ export const meta = {
   help: 'Best voice quality, with delivery cues and word timings. Paid per character.',
   fields: [
     { key: 'apiKey', label: 'API key', kind: 'secret' },
-    { key: 'model', label: 'Model', kind: 'select', options: ['eleven_v3', 'eleven_multilingual_v2', 'eleven_flash_v2_5', 'eleven_turbo_v2_5'], default: 'eleven_v3', hint: 'Only eleven_v3 understands [audio tags]' },
+    { key: 'model', label: 'Model', kind: 'select', options: ['eleven_v3', 'eleven_v4', 'eleven_v4_turbo', 'eleven_multilingual_v2', 'eleven_flash_v2_5', 'eleven_turbo_v2_5'], default: 'eleven_v3', hint: 'v3 and v4 understand [audio tags]; v4 Turbo costs half' },
     { key: 'concurrency', label: 'Requests at once', kind: 'number', default: 2, hint: 'Your plan’s limit, minus one' },
   ],
 };
@@ -26,7 +26,7 @@ export function create({ apiKey, model = 'eleven_v3', voices = [], defaultVoice,
 
   return {
     type,
-    capabilities: { timings: true, audioTags: model === 'eleven_v3', runsIn: 'server' },
+    capabilities: { timings: true, audioTags: /^eleven_v[34]/.test(model), runsIn: 'server' },
     model,
     describe: () => `ElevenLabs ${model}`,
     voices: () => voices,
