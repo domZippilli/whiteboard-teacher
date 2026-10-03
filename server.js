@@ -362,6 +362,7 @@ function updateLesson(id, fn) {
 
 const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'lesson';
 const WPM = 150;
+const MAX_MINUTES = 10; // longest lesson offered (1 / 3 / 5 / 10 min)
 
 // ---------- API ----------
 
@@ -381,7 +382,7 @@ async function writeSection(id, index) {
     teacher: lesson.teacher, tone: lesson.tone, policy: lessonPolicy(lesson), profile: readProfile(lesson.owner), model: lesson.model,
     mode: 'continue', lesson,
     prompt: `Write part ${index + 1} of ${n}: "${s.title}". About ${words} spoken words.
-${index === 0 ? 'This is the opening of the lesson; the board starts empty.' : `Part ${index} has just been performed; the board still shows whatever it left there.`}
+${index === 0 ? 'This is the opening of the lesson; the board starts empty.' : `Part ${index} has just been performed and this part follows it straight away, with no break: the student never left, so just carry on (no greeting, "welcome back" or recap of what was just said). The board still shows whatever part ${index} left there.`}
 ${index === n - 1 ? 'This is the final part of the lesson.' : ''}
 Return: {"steps":[...]}`,
   }));
@@ -397,7 +398,7 @@ async function writeQuiz(id) {
   const n = lesson.outline.sections.length;
   if (!lesson.sections[n - 1]) await api['POST section']({ id, index: n - 1 });
   lesson = await loadLesson(id);
-  const count = lesson.minutes <= 5 ? 3 : lesson.minutes <= 10 ? 5 : 8;
+  const count = lesson.minutes <= 1 ? 2 : lesson.minutes <= 5 ? 3 : lesson.minutes <= 10 ? 5 : 8;
   const { json: quiz } = await askJson({
     teacher: lesson.teacher, tone: lesson.tone, policy: lessonPolicy(lesson), profile: readProfile(lesson.owner), model: lesson.model,
     mode: 'fork', lesson,
@@ -420,6 +421,7 @@ Return: {"questions":[{"q":"...","choices":["..."],"answer":0,"explain":"..."}]}
 
 const api = {
   async 'POST outline'({ topic, minutes = 5, level, tone, teacher, model }, _, ctx) {
+    minutes = Math.min(MAX_MINUTES, Math.max(1, Math.round(+minutes) || 5));
     // Screen first: nothing reaches the lesson writer until the topic passes the content policy.
     await screen(topic, 'lesson topic', ctx.user);
     const n = Math.max(1, Math.min(40, Math.round(minutes / 1.75)));
@@ -427,7 +429,7 @@ const api = {
       teacher, tone, policy: policyFor(ctx.user), profile: readProfile(ctx.user.id), model,
       mode: 'start', name: `Lesson: ${topic}`.slice(0, 80),
       prompt: `A student asked: "${topic}"
-Plan a ${minutes}-minute lesson${level ? ` for a ${level} audience` : ''}, split into ${n} part(s) that will each be written separately (about ${Math.round(minutes / n * 10) / 10} minutes of speech each). Shape the lesson however you think teaches it best.
+Plan a ${minutes}-minute lesson${level ? ` for a ${level} audience` : ''}, split into ${n} part(s) that will each be written separately but played back to back as one continuous lesson (about ${Math.round(minutes / n * 10) / 10} minutes of speech each). Shape the lesson however you think teaches it best.
 Return: {"title":"<short lesson title>","sections":[{"title":"...","plan":"<what this part covers and how you intend to show it on the board>"}]}
 I'll then ask you for each part in turn.`,
     });

@@ -1,7 +1,7 @@
 # Whiteboard Teacher — Plan
 
 ## Goal
-Ask a question, pick a length (3 / 5 / 10 / 30 / 60 min), and get a chalk-and-talk lesson:
+Ask a question, pick a length (1 / 3 / 5 / 10 min), and get a chalk-and-talk lesson:
 narrated by a natural voice, with diagrams drawn live in color and simple animations,
 interruptible with questions, ending with a quiz. Teacher name is customizable. Works as a home page.
 

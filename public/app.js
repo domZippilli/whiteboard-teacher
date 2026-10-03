@@ -1318,7 +1318,7 @@ function route() {
   const p = new URLSearchParams(location.search);
   if (p.get('lesson')) return openLesson(p.get('lesson'));
   if (p.get('q')) {
-    if (p.get('min')) settings.minutes = +p.get('min');
+    if (p.get('min')) settings.minutes = Math.min(10, Math.max(1, +p.get('min') || 5));
     return startLesson(p.get('q'), settings.minutes);
   }
   player.stop();
@@ -1359,6 +1359,7 @@ async function signedIn() {
   me = await api('me');
   if (!me.user) return account.showPicker();
   Object.assign(settings, DEFAULTS, me.user.settings || {});
+  if (![1, 3, 5, 10].includes(+settings.minutes)) settings.minutes = Math.min(10, +settings.minutes || 5); // older choices: 30, 60
   applyName();
   const chip = $('#meChip');
   chip.innerHTML = '<span class="avatar"></span><span class="nm"></span>';
