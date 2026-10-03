@@ -67,12 +67,72 @@ const TONES = {
 
 function system(teacher, tone) {
   return `You are ${teacher || 'Claude'}, a brilliant${TONES[tone] ? '' : ', warm'} teacher giving a live lesson at a whiteboard. You write lessons as scripts that a program performs: your words are spoken by a text-to-speech voice and your drawing is drawn live in sync. Be the teacher you'd most want to learn from: make it vivid, visual and genuinely interesting.
-${TONES[tone] ? `\nYour teaching personality for this lesson, chosen by the student: ${TONES[tone]}\n` : ''}
+${TONES[tone] ? `\nYour teaching personality for this lesson, chosen by the student: ${TONES[tone]}\n` : ''}${policyPrompt()}
 Here is the complete reference for the script format:
 
 ${SCRIPT_API()}
 
 Every reply must be ONLY valid JSON, no prose before or after, no code fences.`;
+}
+
+// ---------- content policy ----------
+// An optional plain-English policy file (content-policy.txt) set by whoever runs the server, e.g.
+// "The learner is 9 years old." When present, every topic and question is screened first, and the
+// policy is part of every lesson-writing prompt. Read on each use, so edits apply immediately.
+
+const POLICY_FILE = path.resolve(ROOT, process.env.CONTENT_POLICY || 'content-policy.txt');
+function policy() {
+  try {
+    // Lines starting with # are comments for the person editing the file.
+    return fs.readFileSync(POLICY_FILE, 'utf8').split('\n').filter(l => !l.trim().startsWith('#')).join('\n').trim();
+  } catch { return ''; }
+}
+function policyPrompt() {
+  const p = policy();
+  return p ? `
+CONTENT POLICY (set by the person who runs this app; it overrides the student's chosen level and style
+wherever they conflict). Everything you say and draw must follow it:
+${p}
+` : '';
+}
+
+class Refused extends Error {
+  constructor(message, suggestions = []) { super(message); this.suggestions = suggestions; }
+}
+
+// Returns { decision: 'allow' | 'adapt' | 'refuse', message, note }; throws Refused when refused.
+async function screen(text, kind) {
+  const p = policy();
+  if (!p) return { decision: 'allow' };
+  const r = await claudeRun([
+    '--model', process.env.SCREEN_MODEL || 'sonnet', '--no-session-persistence',
+    '--system-prompt', `You screen requests for a whiteboard teaching app against a content policy written by the person who runs it (often a parent or teacher).
+POLICY:
+${p}
+
+Decide for the ${kind} you are given:
+- "allow": fine as is.
+- "adapt": the subject is OK to teach but parts must be handled carefully or left out for this audience. Put guidance for the teacher in "note".
+- "refuse": the policy says this shouldn't be taught at all. Put a short, kind message to the learner in "message" (one or two sentences, suitable for the audience, no lecturing; suggest a nearby topic they could ask about instead if there is a good one). Also put 2-3 related topics that ARE fine under the policy in "suggestions": short questions in the learner's own voice that would make a fun lesson (e.g. "How are swords forged?"), matching any you mention in the message.
+Be sensible: curiosity is good, and most topics can be adapted. Refuse only what the policy rules out.
+Judge the request as the learner literally asked it. If what they asked for is ruled out (e.g. how to make
+something the policy forbids, or a cheeky request for something rude), REFUSE it, even when a safe related topic
+exists (its history, a word with a double meaning): offer that safe topic in "suggestions" rather than quietly
+teaching it instead. "adapt" is for requests that are fine as asked but need care in places.
+Many refusals will be kids being cheeky for a laugh (rude words, potty humor, "show me something naughty").
+Don't scold or shame: answer with good humor, like a teacher who's heard it all and is amused, and redirect
+to something genuinely fun and related if you can (a pun or a real-world double meaning is perfect).
+The message is spoken aloud by the teacher's voice, so write it to be said, not read.
+Reply with ONLY JSON: {"decision":"allow|adapt|refuse","note":"...","message":"...","suggestions":["..."]}`,
+    text,
+  ]);
+  const v = parseJson(r.result);
+  console.log(`screen ${kind}: ${v.decision} "${text.slice(0, 60)}"${v.note ? ` (${v.note.slice(0, 80)})` : ''}`);
+  if (v.decision === 'refuse') {
+    const suggestions = (Array.isArray(v.suggestions) ? v.suggestions : []).filter(x => typeof x === 'string' && x.trim()).slice(0, 3);
+    throw new Refused(v.message || "That's not something I can teach here. Try asking about something else!", suggestions);
+  }
+  return v;
 }
 
 function claudeRun(args) {
@@ -190,6 +250,8 @@ async function ttsSlot(fn) {
 
 const api = {
   async 'POST outline'({ topic, minutes = 5, level, tone, teacher, model }) {
+    // Screen first: nothing reaches the lesson writer until the topic passes the content policy.
+    await screen(topic, 'lesson topic');
     const n = Math.max(1, Math.min(40, Math.round(minutes / 1.75)));
     const session = crypto.randomUUID();
     await fsp.mkdir(SESSIONS, { recursive: true });
@@ -224,6 +286,8 @@ I'll then ask you for each part in turn.`,
 
   async 'POST question'({ id, section, step, question, recent }) {
     const lesson = await loadLesson(id);
+    // Screen first, as for topics.
+    await screen(`Lesson: "${lesson.outline.title}". Question: "${question}"`, "student's question during a lesson");
     // Fork the lesson session so the aside knows the whole lesson without blocking the next part.
     const last = lesson.outline.sections.length - 1;
     const atEnd = section >= last && step >= (lesson.sections[last]?.steps?.length || 0);
@@ -281,7 +345,7 @@ Return: {"steps":[...]}`,
   },
 
   async 'GET config'() {
-    return { model: DEFAULT_MODEL, tts: !!ELEVENLABS_API_KEY, voice: DEFAULT_VOICE };
+    return { model: DEFAULT_MODEL, tts: !!ELEVENLABS_API_KEY, voice: DEFAULT_VOICE, policy: !!policy() };
   },
 
   async 'GET voices'() {
@@ -380,6 +444,10 @@ http.createServer(async (req, res) => {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify(out));
     } catch (e) {
+      if (e instanceof Refused) {
+        res.writeHead(422, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ error: e.message, refused: true, suggestions: e.suggestions }));
+      }
       console.error(e);
       res.writeHead(500, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: e.message }));

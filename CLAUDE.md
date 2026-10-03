@@ -23,6 +23,9 @@ home page / address-bar search engine.
 - Spoken questions: browser MediaRecorder → `POST /api/stt` (raw audio) → ElevenLabs Scribe (`scribe_v2`).
 - Teaching style (Serious / Matter of fact / Jovial / Goofy) is `TONES` in `server.js`, stored per lesson and
   added to the system prompt for every call in that lesson.
+- Content policy: optional `content-policy.txt` (gitignored; see `content-policy.example.txt`). When present,
+  topics/questions are screened by `claude -p --model sonnet` (Haiku was inconsistent) before anything is sent to the lesson writer (refusal → 422
+  `{refused:true, suggestions}`: a spoken kind message plus suggested safe topics as buttons), and the policy is added to every lesson system prompt.
 - Run: `npm start` → http://localhost:4747 (`/?q=topic&min=5` starts a lesson directly).
 
 ## Core concept: the lesson script

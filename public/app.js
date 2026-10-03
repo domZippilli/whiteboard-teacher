@@ -9,7 +9,7 @@ const api = async (path, body, method) => {
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error || res.statusText);
+  if (!res.ok) throw Object.assign(new Error(data.error || res.statusText), { refused: !!data.refused, suggestions: data.suggestions || [] });
   return data;
 };
 
@@ -102,6 +102,21 @@ async function sayLine(kind) {
   lineAudio.play().catch(() => {});
 }
 const hmm = () => sayLine('hmm');
+
+// Say an arbitrary short message in the teacher's voice (e.g. a content-policy refusal).
+async function sayText(text) {
+  if (!config.tts) {
+    const u = new SpeechSynthesisUtterance(stripCues(text));
+    u.rate = settings.rate;
+    return speechSynthesis.speak(u);
+  }
+  const r = await speech(text);
+  if (!r?.url) return;
+  levelAudio(lineAudio);
+  lineAudio.src = r.url;
+  lineAudio.playbackRate = settings.rate;
+  lineAudio.play().catch(() => {});
+}
 
 // ---------- speaking questions ----------
 // Click the mic to record, click again (or pause speaking) to stop; the transcript is then asked.
@@ -236,6 +251,7 @@ class Player {
     this.lesson = lesson;
     this.pos = { section: 0, step: 0 };
     this.endRound = 0;
+    this.titleShown = false;
     this.board.reset();
     $('#lessonTitle').textContent = lesson.outline?.title || lesson.topic;
     renderTimeline();
@@ -297,7 +313,16 @@ class Player {
         showPrep(`Writing part ${section + 1}: ${l.outline.sections[section].title}…`);
         try { sec = await this.section(section); } catch (e) { showPrep(`Something went wrong: ${e.message}`, true); return; }
         if (!alive()) return;
+        // Don't drop the waiting screen until the first line can actually be spoken.
+        $('#prepText').textContent = 'Clearing my throat…';
+        await speech(sec.steps?.[this.pos.step]?.say, l.id);
+        if (!alive()) return;
         hidePrep();
+      }
+      if (this.titleShown) {
+        this.titleShown = false;
+        await this.board.run({ op: 'erase', target: ['_title', '_titleBy'] });
+        if (!alive()) return;
       }
       // Prefetch the next part while this one plays.
       if (section + 1 < l.outline.sections.length) this.section(section + 1).catch(() => {});
@@ -413,6 +438,16 @@ class Player {
     });
   }
 
+  // Handwritten title card shown while the first part is being written; erased when it starts.
+  titleCard() {
+    const l = this.lesson;
+    this.titleShown = true;
+    const title = l.outline?.title || l.topic;
+    const size = Math.min(84, Math.floor(1400 / (0.48 * Math.max(10, title.length))));
+    this.board.run({ op: 'text', id: '_title', x: 800, y: 330, text: title, size, color: 'blue', align: 'middle', underline: true })
+      .then(() => this.board.run({ op: 'text', id: '_titleBy', x: 800, y: 330 + size * 0.9 + 40, text: `with ${settings.teacher}  ·  ${l.minutes} min`, size: 40, color: 'gray', align: 'middle' }));
+  }
+
   needGesture() {
     this.clock.pause(); this.board.pause();
     updatePlayButton();
@@ -462,7 +497,20 @@ class Player {
     let aside;
     try {
       aside = await api('question', { id: this.lesson.id, section, step, question, recent });
-    } catch (e) { showPrep(`Couldn't answer: ${e.message}`, true); return; }
+    } catch (e) {
+      lineAudio.pause();
+      if (!e.refused) { showPrep(`Couldn't answer: ${e.message}`, true); return; }
+      // Declined by the content policy: the teacher says why and offers other questions.
+      hidePrep();
+      sayText(e.message);
+      const atEnd = this.endRound > 0;
+      showRefusal(e.message, e.suggestions, {
+        pick: q => { lineAudio.pause(); this.pos = { section, step }; this.ask(q); },
+        back: () => { lineAudio.pause(); this.seek(section, step); },
+        backLabel: atEnd ? 'Back to the board' : 'Back to the lesson',
+      });
+      return;
+    }
     // Keep the thinking screen up until the first line of the answer can be spoken.
     (aside.steps || []).slice(1, 3).forEach(st => speech(st.say, this.lesson.id));
     await speech(aside.steps?.[0]?.say, this.lesson.id);
@@ -519,8 +567,31 @@ function showStart({ resume, fresh } = {}) {
   $('#startGo').textContent = resume ? '▶ Continue' : fresh ? '▶ Start' : '▶ Resume';
   $('#startOver').classList.toggle('hidden', !!(resume || fresh));
 }
+// A declined topic or question: the teacher's message, suggested alternatives as buttons, and
+// a way out. pick(question) runs a suggestion; back() is offered when there's somewhere to return to.
+function showRefusal(message, suggestions = [], { pick, back, backLabel } = {}) {
+  const box = $('#refusal');
+  box.classList.remove('hidden');
+  $('#refusalMsg').textContent = message;
+  const list = $('#refusalPicks');
+  list.replaceChildren();
+  for (const q of suggestions) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = q;
+    b.onclick = () => { hideRefusal(); pick(q); };
+    list.appendChild(b);
+  }
+  const backBtn = $('#refusalBack');
+  backBtn.classList.toggle('hidden', !back);
+  backBtn.textContent = backLabel || 'Back';
+  backBtn.onclick = () => { hideRefusal(); back(); };
+  $('#refusalNew').onclick = () => { hideRefusal(); lineAudio.pause(); goHome(); };
+}
+function hideRefusal() { $('#refusal').classList.add('hidden'); }
+
 function hideStart() { $('#start').classList.add('hidden'); }
-function hidePrep() { $('#prep').classList.add('hidden'); stopQuips(); showPrep.kind = null; }
+function hidePrep() { $('#prep').classList.add('hidden'); $('#prep').classList.remove('low'); stopQuips(); showPrep.kind = null; }
 function updatePlayButton() { $('#playBtn').textContent = player.playing && !player.paused ? '⏸' : '▶'; }
 
 function renderTimeline() {
@@ -590,6 +661,7 @@ function show(screen) {
   $('#feedback').classList.add('hidden');
   $('#handBox').classList.add('hidden');
   $('#endQ').classList.add('hidden');
+  hideRefusal();
   hideStart();
   hidePrep();
 }
@@ -646,15 +718,25 @@ async function startLesson(topic, minutes = settings.minutes) {
   let lesson;
   try {
     lesson = await api('outline', { topic, minutes: +minutes, level: settings.level, tone: settings.tone, teacher: settings.teacher, model: settings.model });
-  } catch (e) { return showPrep(`Something went wrong: ${e.message}`, true); }
+  } catch (e) {
+    if (!e.refused) return showPrep(`Something went wrong: ${e.message}`, true);
+    hidePrep();
+    sayText(e.message);
+    return showRefusal(e.message, e.suggestions, {
+      pick: q => { lineAudio.pause(); history.replaceState({}, '', `/?q=${encodeURIComponent(q)}&min=${minutes}`); startLesson(q, minutes); },
+    });
+  }
   history.replaceState({}, '', `/?lesson=${lesson.id}`);
   for (const s of lesson.outline.sections) {
     const li = document.createElement('li');
     li.textContent = s.title;
     $('#prepOutline').appendChild(li);
   }
-  showPrep(`Writing part 1…`);
   player.load(lesson);
+  // While part 1 is written, put the lesson's title on the board, with the waiting card below it.
+  showPrep(`Writing part 1…`);
+  $('#prep').classList.add('low');
+  player.titleCard();
   player.play();
 }
 
