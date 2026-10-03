@@ -82,7 +82,7 @@
       <div id="handBox" class="hand hidden">
         <form id="handForm">
           <button type="button" id="micBtn" class="mic" title="Speak your question (m)" aria-label="Record question">🎤</button>
-          <input id="handQ" autocomplete="off" placeholder="Type or 🎤 speak your question">
+          <input id="handQ" autocomplete="off" placeholder="Type, or hold A to talk">
           <button type="submit">Ask</button>
           <button type="button" id="handCancel" class="ghost">Never mind</button>
         </form>
@@ -102,11 +102,24 @@
         <div class="prep-card end-card">
           <h2 id="endTitle">Any questions?</h2>
           <form id="endForm" class="ask">
-            <input id="endInput" autocomplete="off" placeholder="Type or 🎤 speak your question">
+            <input id="endInput" autocomplete="off" placeholder="Type, or hold A to talk">
             <button type="button" id="endMic" class="mic" title="Speak your question" aria-label="Record question">🎤</button>
             <button type="submit">Ask</button>
           </form>
-          <button type="button" id="endNone" class="ghost none">No, I'm all good</button>
+          <div id="endCountdown" class="countdown hidden"><div class="fill"></div><span>Quiz in 30…</span></div>
+          <div class="row center">
+            <button type="button" id="endQuiz" class="quiz-now">Quiz me now</button>
+            <button type="button" id="endSkip" class="ghost">Skip quiz</button>
+          </div>
+        </div>
+      </div>
+      <div id="quiz" class="prep hidden">
+        <div class="prep-card quiz-card">
+          <div class="quiz-top"><span id="quizCount"></span><button type="button" id="quizSkip" class="ghost">Skip quiz</button></div>
+          <h2 id="quizQ"></h2>
+          <div id="quizChoices" class="choices"></div>
+          <p id="quizExplain" class="explain"></p>
+          <div class="row center"><button type="button" id="quizNext" class="hidden">Next question</button></div>
         </div>
       </div>
       <div id="feedback" class="feedback hidden">
@@ -128,7 +141,7 @@
       <button class="icon-btn big" id="playBtn" title="Play / pause (space)">⏸</button>
       <button class="icon-btn" id="nextBtn" title="Next step (→)">⏭</button>
       <div class="timeline" id="timeline"></div>
-      <button class="hand-btn" id="handBtn" title="Ask a question (?)">✋ Ask</button>
+      <button class="hand-btn" id="handBtn" title="Ask a question (tap A to type, hold A to talk)">✋ Ask</button>
       <button class="icon-btn" id="ccBtn" title="Captions (c)">CC</button>
     </footer>
   </main>

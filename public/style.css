@@ -139,3 +139,32 @@ dialog input:not([type=range]), dialog select { display: block; width: 100%; mar
 .picks button::before { content: '→ '; color: var(--accent); font-weight: 600; }
 .picks button:hover { border-color: var(--accent); }
 .refusal-card .row button { border-radius: 999px; padding: 8px 18px; }
+
+/* Quiz countdown on the end card */
+.countdown { position: relative; height: 30px; border-radius: 999px; background: var(--bg); overflow: hidden; border: 1px solid var(--line); }
+.countdown .fill { position: absolute; inset: 0 auto 0 0; background: color-mix(in srgb, var(--accent) 22%, transparent); transition: width 1s linear; }
+.countdown span { position: relative; display: block; text-align: center; line-height: 30px; font-family: 'Patrick Hand', cursive; font-size: 20px; }
+.end-card .row button { border-radius: 999px; padding: 8px 18px; border: 0; }
+.end-card .quiz-now { background: var(--accent); color: white; font-weight: 600; }
+
+/* Quiz */
+.quiz-card { width: min(680px, 94%); display: flex; flex-direction: column; gap: 14px; text-align: left; }
+.quiz-top { display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 14px; }
+.quiz-top button { border-radius: 999px; padding: 4px 12px; font-size: 13px; }
+.quiz-card h2 { margin: 0; font-family: 'Patrick Hand', cursive; font-weight: 400; font-size: 30px; line-height: 1.25; }
+.choices { display: flex; flex-direction: column; gap: 8px; }
+.choices button { text-align: left; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font-size: 17px; }
+.choices button b { display: inline-block; width: 1.6em; color: var(--accent); }
+.choices button:not(:disabled):hover { border-color: var(--accent); }
+.choices button.right { border-color: #2e8a3e; background: color-mix(in srgb, #2e8a3e 15%, var(--bg)); }
+.choices button.wrong { border-color: #d23a2f; background: color-mix(in srgb, #d23a2f 12%, var(--bg)); }
+.choices button:disabled { cursor: default; color: var(--ink); }
+.explain { margin: 0; font-size: 17px; line-height: 1.45; min-height: 1em; }
+#quizNext { border: 0; border-radius: 999px; padding: 10px 22px; background: var(--accent); color: white; font-weight: 600; }
+
+.lesson-row .grade { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+.lesson-row .grade:empty { display: none; }
+.lesson-row .grade.perfect { background: color-mix(in srgb, #2e8a3e 18%, transparent); color: #2e8a3e; }
+.lesson-row .grade.perfect::before { content: '★ '; }
+.lesson-row .grade.good { background: color-mix(in srgb, #1f5fbf 15%, transparent); color: #1f5fbf; }
+.lesson-row .grade.low { background: color-mix(in srgb, #e57a12 18%, transparent); color: #c0640c; }

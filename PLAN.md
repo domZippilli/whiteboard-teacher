@@ -2,91 +2,92 @@
 
 ## Goal
 Ask a question, pick a length (3 / 5 / 10 / 30 / 60 min), and get a chalk-and-talk lesson:
-narrated by TTS, with diagrams drawn live in color and simple animations, interruptible with
-questions. Teacher name is customizable. Works as a home page.
+narrated by a natural voice, with diagrams drawn live in color and simple animations,
+interruptible with questions, ending with a quiz. Teacher name is customizable. Works as a home page.
+
+## Status
+**V1 is built** (2026-10-03) and in daily use, locally. Remaining work is under "Next" and "V2" below.
 
 ## Architecture
 ```
-Browser (public/)                         server.js                 claude -p (one session per lesson)
- ├ Home: big question box + length  ──►  POST /api/outline   ──►   outline JSON
- ├ Player: SVG board + TTS          ──►  POST /api/section   ──►   steps JSON (per section)
- └ "Raise hand" question            ──►  POST /api/question  ──►   aside steps JSON
+Browser (public/)                          server.js                      external
+ ├ Home: question box, length,      ──►  POST /api/outline   ──►  screen (if policy) → claude -p: outline
+ │  level, style, 🎤 / hold A
+ ├ Player: SVG board + narration    ──►  POST /api/section   ──►  claude -p --resume: part N
+ │                                  ──►  POST /api/tts       ──►  ElevenLabs v3 with-timestamps (cached)
+ ├ Raise hand / end questions       ──►  POST /api/question  ──►  screen → claude -p --fork-session
+ ├ Spoken questions                 ──►  POST /api/stt       ──►  ElevenLabs Scribe
+ ├ End-of-lesson quiz               ──►  POST /api/quiz      ──►  claude -p --fork-session
+ └ Library, feedback, progress      ──►  lessons/<id>/lesson.json + audio/
 ```
-- **Outline first** (fast, small): title + N sections, N ≈ minutes / 1.75.
-- **Sections on demand**: generate section 1, start playing; prefetch section i+1 while i plays.
-  A 60-min lesson is ~34 sections, never generated all at once.
-- **Word budget**: ~150 spoken words/min, divided across sections, drives lesson length.
-
-## Lesson format (model output)
-`{"steps":[{"say":"spoken sentence(s)","draw":[ops]}]}`
-Ops: `clear`, `text`, `line` (+arrow/dash), `rect`, `circle`, `path` (SVG d), `dot` (particle
-moving along a path, repeatable — electrons, photons, flow), `move`, `highlight`, `erase`, `stop`.
-Named palette: black, blue, red, green, orange, purple, brown, gray.
-
-## Rendering
-- SVG 1600x900 viewBox scaled to the window.
-- Strokes "draw on" via stroke-dashoffset animation; text appears letter-by-letter in a
-  handwriting font; fills fade in semi-transparent like marker.
-- Per step: speak `say` and schedule its ops across the estimated speech duration; step ends
-  when both speech and drawing finish.
-- `dot` uses SVG `animateMotion`; pause freezes all animations.
-
-## Controls / interruption
-- Play / pause, previous / next step, speed (TTS rate), progress by section.
-- **Raise hand**: pauses, you type (later: speak) a question, a short aside is generated on a
-  fresh board, then the original board is restored and the lesson resumes.
-- Keyboard: space = pause, ? = raise hand, arrows = step.
-
-## Settings (localStorage)
-Teacher name, voice, speech rate, default length, audience level (kid / general / expert),
-model (default `claude-opus-5-5`; `claude-sonnet-5-5` optional), TTS provider + voice.
-
-## Home page use
-- Landing page is just the question box with "Ask <Teacher>".
-- `/?q=...&min=5` starts directly, so it can be registered as a custom browser search engine.
-
-## Milestones
-1. **MVP** (built 2026-10-03, in testing): server + outline/section/question endpoints with schema validation and
-   the documented script API, SVG renderer, ElevenLabs TTS with timestamp sync (Web Speech fallback),
-   play/pause/raise-hand, settings, end-of-lesson feedback prompt (stored, used in V2).
-
-2. **Polish**: better layout reliability (renderer-side overlap/bounds clamping), smoother
-   sync, saved lesson history + replay without regenerating, export/share.
-3. **Saved lessons**: lesson + audio storage, library page, question branches on the timeline.
-4. **Smarter generation**: streaming steps so playback starts within seconds; voice questions
-   via speech recognition; quizzes / "check your understanding" pauses.
-
-## Decisions (2026-10-03)
-1. **Model: Opus default** via `claude -p` (one Claude Code session per lesson; no API key), Sonnet selectable. Opus is trusted to be
-   creative with the board and the lesson's structure.
-2. **TTS: ElevenLabs**, using its with-timestamps endpoint to line drawing up with speech.
-   Behind a small provider interface; browser Web Speech is the no-key fallback.
-3. **Local only.** Lessons via the local `claude` CLI; ElevenLabs key from 1Password; no auth/hosting.
-4. **Save lessons for replay.** Questions asked become part of the saved lesson.
+- **One Claude Code session per lesson** (`claude -p`, Opus by default, no API key). The outline
+  creates it; each part is written in order with `--resume`, so later parts know what was said and
+  drawn. Questions and the quiz `--fork-session` from it.
+- **Outline first**, then parts on demand: part 1 starts writing as soon as the outline exists;
+  part i+1 is prefetched while part i plays. Parts ≈ minutes / 1.75; ~150 spoken words/min.
+- **Speech is prefetched** a few steps ahead (ElevenLabs takes ~4s per paragraph), including
+  across part boundaries and in answers to questions.
 
 ## Script API, not restrictions
 - The model gets clear **documentation of the script format** (every op, its fields,
-  coordinates, timing behaviour, what renders how), written like an API reference, in
-  `docs/SCRIPT_API.md` and loaded into the prompt from there.
+  coordinates, timing, delivery cues), written like an API reference, in `docs/SCRIPT_API.md`,
+  which is also the system prompt.
 - **No imposed structure**: no layout grid, no section template, no step-size caps. How the
   board is used and how the lecture flows is up to the model.
-- Robustness only where it costs no creativity: output is parsed/validated against the format,
-  with one retry on malformed JSON; the renderer tolerates unknown fields and odd values.
-- Style guidance comes from the learner (see V2 "Learning style"), not hard-coded rules.
+- Robustness only where it costs no creativity: JSON is parsed with one retry in the same session;
+  the renderer ignores unknown ops/fields and odd values.
+- Style guidance comes from the learner (style picker now, learning-style profile in V2), not
+  hard-coded rules.
 
-## Saved lessons & replay
-- Each lesson saved to `lessons/<slug>-<date>/`: `lesson.json` (outline + all steps) and the
-  generated audio per step (`audio/<section>-<step>.mp3` + timing), so replay costs nothing.
-- Asides from "raise hand" are saved as **branches** attached to the step where they were
-  asked; on replay they show as markers on the timeline you can open or skip. New questions
-  on replay add new branches.
-- Library page: list of past lessons, search, delete, resume where you left off.
+## What V1 does
+**Lessons**
+- Script: `{"steps":[{"say":"...","draw":[ops]}]}`; ops are drawn in sync with speech, optionally
+  pinned to words with `"at"`. 20+ ops (shapes, paths, braces, labels, icons, moving particles,
+  move/scale/rotate, highlight, erase...). See `docs/SCRIPT_API.md`.
+- Narration: ElevenLabs `eleven_v3` with per-character timestamps; `[audio tags]` in `say` cue
+  delivery (`[excited]`, `[whispers]`, `[pause]`...). Loudness leveled in the browser. Voices:
+  Justin (default), Alexander. Browser Web Speech fallback without a key.
+- Teaching style picker: Serious / Matter of fact / Jovial / Goofy. Audience level picker.
+- Waiting: pencil-doodle animation with quips; handwritten title card on the board while part 1 is written.
 
-## V2 (after V1)
-- **Learning style profile.** After each lesson, ask "Did you like it? What worked, what
-  didn't?" (V1 already collects this). V2 turns that feedback into a per-user style guide
-  (`profile/style.md`) that Claude maintains and includes when writing lessons: pace,
+**Interaction**
+- Raise hand any time (type, 🎤, or hold A): "Hmm..." in the teacher's voice, an answer on a fresh
+  board, then the board is restored and the lesson resumes.
+- End of lesson: "Any questions?" (spoken), with a 30s countdown to a multiple-choice quiz
+  (spoken questions and explanations, skippable), then a feedback card.
+- Keys: space play/pause, ←/→ steps, hold A talk / tap A ask, m ask by voice, c captions, 1-4 quiz.
+
+**Saved lessons**
+- `lessons/<date>-<slug>-<id>/lesson.json` (outline, parts, asides, quiz, quiz results, feedback,
+  progress) + `audio/<hash>.mp3` with timings, so replay costs nothing.
+- Library on the home screen: resume where you left off, last quiz score badge, delete.
+- Questions asked are saved as markers on the timeline; click to replay them.
+
+**Content policy** (optional `content-policy.txt`, plain English, e.g. "the learner is 10")
+- Topics and questions are screened by Sonnet *before* anything is sent to the lesson writer.
+- Refusals are spoken kindly (playful for cheeky requests) with 2-3 suggested safe topics as buttons.
+- The policy is added to every lesson prompt, overriding level/style.
+
+**Home page use**
+- `/?q=...&min=5` starts a lesson directly, so it can be a custom browser search engine.
+
+## Decisions (2026-10-03)
+1. **Model: Opus default** via `claude -p` (no API key), Sonnet selectable. Opus is trusted to be
+   creative with the board and the lesson's structure.
+2. **TTS: ElevenLabs** (v3 for expressiveness; timestamps for sync). Web Speech as fallback.
+3. **Local only.** ElevenLabs key from 1Password (`op read`); no auth/hosting.
+4. **Save lessons for replay.** Questions and quizzes become part of the saved lesson.
+5. **Content screening is serial** (screen, then generate), so refused requests never reach Opus.
+   Sonnet screens (Haiku was inconsistent).
+
+## Next (polish)
+- **Faster start**: stream part 1 so playback begins within seconds instead of 30-60s.
+- **Layout safety net**: renderer-side bounds clamping / overlap nudging, without constraining the model.
+- **Library**: search, export/share a lesson.
+
+## V2
+- **Learning style profile.** Turn post-lesson feedback (already collected) into a per-learner
+  style guide (`profile/style.md`) that Claude maintains and includes when writing lessons: pace,
   amount of drawing vs talking, analogies, maths depth, humour, and so on. Viewable and editable.
-  Possibly several modes per user (e.g. "quick overview" vs "deep dive").
-- **Post-lecture quizzes.** Optional quiz at the end, generated from the lesson; answers and
-  weak spots feed back into the learning-style profile and suggest follow-up lessons.
+  Possibly several modes per learner (e.g. "quick overview" vs "deep dive").
+- **Quiz follow-ups.** Feed quiz results and weak spots into the profile and suggest follow-up lessons.

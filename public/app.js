@@ -24,7 +24,7 @@ let config = { tts: false };
 function applyName() {
   $('#teacherName').textContent = settings.teacher;
   document.title = `Ask ${settings.teacher}`;
-  $('#q').placeholder = `What would you like ${settings.teacher} to teach you?`;
+  $('#q').placeholder = `What would you like ${settings.teacher} to teach you? (hold A to talk)`;
 }
 
 // ---------- speech ----------
@@ -123,7 +123,9 @@ async function sayText(text) {
 
 const mic = { rec: null, stream: null, stopTimer: null };
 // btn: the mic button (shows recording state); input: where status shows as placeholder.
-async function startRecording({ btn, input }, onText) {
+// autoStop: stop after a pause in speech (off for push-to-talk, where releasing the key stops it).
+async function startRecording({ btn, input, autoStop = true }, onText) {
+  mic.wantStop = false;
   try {
     mic.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
   } catch (e) { input.placeholder = 'Microphone blocked; type your question'; return; }
@@ -132,7 +134,7 @@ async function startRecording({ btn, input }, onText) {
   const chunks = [];
   rec.ondataavailable = e => e.data.size && chunks.push(e.data);
   btn.classList.add('rec');
-  input.placeholder = 'Listening… (click 🎤 to finish)';
+  input.placeholder = autoStop ? 'Listening… (click 🎤 to finish)' : 'Listening… (let go of A to ask)';
 
   // Level meter + auto-stop after ~1.8s of silence once you've started talking.
   audioCtx ||= new AudioContext();
@@ -149,7 +151,7 @@ async function startRecording({ btn, input }, onText) {
     const rms = Math.sqrt(buf.reduce((a, v) => a + v * v, 0) / buf.length);
     btn.style.setProperty('--level', Math.min(1, rms * 8).toFixed(2));
     if (rms > 0.015) { spoke = true; quietSince = performance.now(); }
-    else if (spoke && performance.now() - quietSince > 1800) return stopRecording();
+    else if (autoStop && spoke && performance.now() - quietSince > 1800) return stopRecording();
     requestAnimationFrame(meter);
   };
   meter();
@@ -175,8 +177,12 @@ async function startRecording({ btn, input }, onText) {
     } finally { btn.classList.remove('busy'); }
   };
   rec.start();
+  if (mic.wantStop) rec.stop(); // push-to-talk key already released
 }
-function stopRecording() { if (mic.rec?.state === 'recording') mic.rec.stop(); }
+function stopRecording() {
+  if (mic.rec?.state === 'recording') mic.rec.stop();
+  else mic.wantStop = true; // released before the mic was ready
+}
 const recording = () => mic.rec?.state === 'recording';
 
 // ---------- loading quips ----------
@@ -327,6 +333,8 @@ class Player {
       // Prefetch the next part while this one plays.
       if (section + 1 < l.outline.sections.length) this.section(section + 1).catch(() => {});
       const steps = sec.steps || [];
+      // Get the quiz ready while the final part plays.
+      if (section === l.outline.sections.length - 1) loadQuiz(l);
       while (alive() && this.pos.step < steps.length) {
         // Prefetch speech for the next few steps (into the next part, if it's written).
         // ElevenLabs takes ~4s per paragraph, so anything not prefetched is an audible gap.
@@ -640,10 +648,164 @@ function showEndQuestions(again) {
   box.classList.remove('hidden');
   $('#endTitle').textContent = again ? 'Any other questions?' : 'Any questions?';
   $('#endInput').value = '';
-  $('#endInput').placeholder = 'Type or 🎤 speak your question';
-  $('#endInput').focus();
+  $('#endInput').placeholder = 'Type, or hold A to talk';
+  // Not focused on purpose: focusing would count as "interacting" and stop the countdown.
+  $('#endInput').blur();
+  startCountdown();
 }
-function hideEndQuestions() { stopRecording(); mic.rec = null; $('#endQ').classList.add('hidden'); }
+function hideEndQuestions() { stopRecording(); mic.rec = null; stopCountdown(); $('#endQ').classList.add('hidden'); }
+
+// ---------- quiz countdown ----------
+// After "any questions?", the quiz starts by itself in 30s unless the student starts asking something.
+
+const COUNTDOWN = 30;
+let countdown = null;
+function startCountdown() {
+  stopCountdown();
+  const quizOk = !!player.lesson && player.lesson.quiz !== false;
+  $('#endQuiz').classList.toggle('hidden', !quizOk);
+  $('#endSkip').textContent = quizOk ? 'Skip quiz' : "No, I'm all good";
+  const bar = $('#endCountdown');
+  bar.classList.toggle('hidden', !quizOk);
+  if (!quizOk) return;
+  let left = COUNTDOWN;
+  const tick = () => {
+    bar.querySelector('span').textContent = `Quiz in ${left}…`;
+    bar.querySelector('.fill').style.width = `${(left / COUNTDOWN) * 100}%`;
+    if (left-- <= 0) { hideEndQuestions(); startQuiz(); }
+  };
+  tick();
+  countdown = setInterval(tick, 1000);
+}
+function stopCountdown() {
+  clearInterval(countdown);
+  countdown = null;
+  $('#endCountdown').classList.add('hidden');
+}
+
+// ---------- quiz ----------
+
+function loadQuiz(lesson) {
+  if (lesson.quiz || lesson.quizPending) return lesson.quizPending;
+  lesson.quizPending = api('quiz', { id: lesson.id }).then(q => {
+    lesson.quiz = q?.questions?.length ? q : false;
+    if (lesson.quiz) quizSpeech(lesson.quiz.questions[0], lesson.id);
+    return lesson.quiz;
+  }).catch(e => { console.warn('quiz', e); lesson.quiz = false; return false; })
+    .finally(() => { lesson.quizPending = null; });
+  return lesson.quizPending;
+}
+
+// Spoken text for a question: the question then its options; and what's said after each answer.
+const quizLines = q => ({
+  ask: `${q.q} ${q.choices.map((c, i) => `${i + 1}: ${c}.`).join(' ')}`,
+  right: `[excited] That's right! ${q.explain || ''}`,
+  wrong: `[warmly] Not quite. It's ${q.choices[q.answer]}. ${q.explain || ''}`,
+});
+function quizSpeech(q, id) {
+  if (!q) return;
+  const l = quizLines(q);
+  speech(l.ask, id); speech(l.right, id); speech(l.wrong, id);
+}
+
+const quiz = { i: 0, score: 0, answers: [], answered: false, active: false };
+
+async function startQuiz() {
+  const l = player.lesson;
+  const box = $('#quiz');
+  box.classList.remove('hidden');
+  Object.assign(quiz, { i: 0, score: 0, answers: [], answered: false, active: true });
+  if (!l.quiz) {
+    $('#quizQ').textContent = 'Writing your quiz…';
+    $('#quizChoices').replaceChildren();
+    $('#quizExplain').textContent = '';
+    $('#quizNext').classList.add('hidden');
+    $('#quizCount').textContent = '';
+    await loadQuiz(l);
+    if (!quiz.active) return;
+    if (!l.quiz) return endQuiz(true);
+  }
+  showQuestion();
+}
+
+function showQuestion() {
+  const l = player.lesson;
+  const qs = l.quiz.questions;
+  const q = qs[quiz.i];
+  quiz.answered = false;
+  $('#quizCount').textContent = `Question ${quiz.i + 1} of ${qs.length}`;
+  $('#quizQ').textContent = q.q;
+  $('#quizExplain').textContent = '';
+  $('#quizNext').classList.add('hidden');
+  const list = $('#quizChoices');
+  list.replaceChildren();
+  q.choices.forEach((c, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.innerHTML = `<b>${i + 1}</b>`;
+    b.append(' ' + c);
+    b.onclick = () => answer(i);
+    list.appendChild(b);
+  });
+  sayText(quizLines(q).ask);
+  quizSpeech(qs[quiz.i + 1], l.id);
+}
+
+function answer(i) {
+  const q0 = player.lesson?.quiz?.questions?.[quiz.i];
+  if (!quiz.active || quiz.answered || !q0 || i >= q0.choices.length) return;
+  quiz.answered = true;
+  const q = player.lesson.quiz.questions[quiz.i];
+  const right = i === q.answer;
+  if (right) quiz.score++;
+  quiz.answers.push(i);
+  [...$('#quizChoices').children].forEach((b, k) => {
+    b.disabled = true;
+    b.classList.toggle('right', k === q.answer);
+    b.classList.toggle('wrong', k === i && !right);
+  });
+  $('#quizExplain').textContent = `${right ? '✓ ' : '✗ '}${stripCues(q.explain || '')}`;
+  const last = quiz.i === player.lesson.quiz.questions.length - 1;
+  $('#quizNext').textContent = last ? 'See my score' : 'Next question';
+  $('#quizNext').classList.remove('hidden');
+  $('#quizNext').focus();
+  sayText(quizLines(q)[right ? 'right' : 'wrong']);
+}
+
+function nextQuestion() {
+  if (!quiz.answered) return;
+  lineAudio.pause();
+  if (quiz.i < player.lesson.quiz.questions.length - 1) { quiz.i++; showQuestion(); }
+  else endQuiz();
+}
+
+function endQuiz(skipped) {
+  const l = player.lesson;
+  quiz.active = false;
+  lineAudio.pause();
+  if (skipped || !l.quiz) { $('#quiz').classList.add('hidden'); return showFeedback(); }
+  const total = l.quiz.questions.length;
+  api('quizResult', { id: l.id, score: quiz.score, total, answers: quiz.answers }).catch(() => {});
+  $('#quizCount').textContent = 'Quiz complete';
+  $('#quizQ').textContent = `You got ${quiz.score} out of ${total}!`;
+  $('#quizChoices').replaceChildren();
+  const pct = quiz.score / total;
+  const line = pct === 1 ? `[excited] You got all ${total}! Perfect score!`
+    : pct >= 0.6 ? `[warmly] You got ${quiz.score} out of ${total}. Nicely done!`
+    : `[warmly] You got ${quiz.score} out of ${total}. That's okay, it's a lot to take in. Want to replay the lesson sometime?`;
+  $('#quizExplain').textContent = stripCues(line);
+  sayText(line);
+  $('#quizNext').textContent = 'Done';
+  $('#quizNext').classList.remove('hidden');
+  $('#quizNext').focus();
+  quiz.answered = false;
+  $('#quizNext').onclick = () => {
+    $('#quizNext').onclick = nextQuestion;
+    lineAudio.pause();
+    $('#quiz').classList.add('hidden');
+    showFeedback();
+  };
+}
 
 function showFeedback() {
   caption('');
@@ -652,7 +814,8 @@ function showFeedback() {
   fb.dataset.liked = '';
   fb.querySelectorAll('.thumbs button').forEach(b => b.classList.remove('on'));
   $('#fbText').value = '';
-  $('#fbSend').textContent = 'Send';
+  $('#fbSend').classList.remove('hidden');
+  $('#fbHome').classList.add('ghost');
 }
 
 function show(screen) {
@@ -661,6 +824,9 @@ function show(screen) {
   $('#feedback').classList.add('hidden');
   $('#handBox').classList.add('hidden');
   $('#endQ').classList.add('hidden');
+  $('#quiz').classList.add('hidden');
+  quiz.active = false;
+  stopCountdown();
   hideRefusal();
   hideStart();
   hidePrep();
@@ -670,6 +836,7 @@ async function goHome() {
   player.stop();
   history.pushState({}, '', '/');
   show('home');
+  clearAsk();
   $('#q').focus();
   renderLibrary();
 }
@@ -700,7 +867,15 @@ async function renderLibrary() {
       await api('lesson?id=' + encodeURIComponent(l.id), null, 'DELETE');
       renderLibrary();
     };
-    row.append(t, meta, del);
+    // Most recent quiz score, if the quiz was taken (skipped quizzes aren't recorded).
+    const grade = document.createElement('div');
+    if (l.lastQuiz?.total) {
+      const { score, total } = l.lastQuiz;
+      grade.className = 'grade ' + (score === total ? 'perfect' : score / total >= 0.6 ? 'good' : 'low');
+      grade.textContent = `${score}/${total}`;
+      grade.title = `Last quiz: ${score} out of ${total}`;
+    }
+    row.append(t, grade, meta, del);
     row.onclick = () => openLesson(l.id);
     lib.appendChild(row);
   }
@@ -806,7 +981,7 @@ function wire() {
     if (player.playing && !player.paused) player.togglePause();
     $('#handBox').classList.remove('hidden');
     $('#handQ').value = '';
-    $('#handQ').placeholder = 'Type or 🎤 speak your question';
+    $('#handQ').placeholder = 'Type, or hold A to talk';
     $('#handQ').focus();
     if (listen) toggleMic();
   };
@@ -839,7 +1014,10 @@ function wire() {
   }));
   $('#fbSend').onclick = async () => {
     await api('feedback', { id: player.lesson.id, liked: fb.dataset.liked === '' ? null : fb.dataset.liked === 'true', text: $('#fbText').value });
-    $('#fbSend').textContent = 'Thanks!';
+    // Sent: drop the Send button and make "New question" the obvious next step.
+    $('#fbSend').classList.add('hidden');
+    $('#fbHome').classList.remove('ghost');
+    $('#fbHome').focus();
   };
   $('#fbReplay').onclick = () => { fb.classList.add('hidden'); player.endRound = 0; player.seek(0, 0); };
 
@@ -858,7 +1036,19 @@ function wire() {
       $('#endForm').requestSubmit();
     });
   };
-  $('#endNone').onclick = () => { hideEndQuestions(); lineAudio.pause(); showFeedback(); };
+  $('#endSkip').onclick = () => { hideEndQuestions(); lineAudio.pause(); showFeedback(); };
+  $('#endQuiz').onclick = () => { hideEndQuestions(); lineAudio.pause(); startQuiz(); };
+  // Any sign the student wants to ask something stops the quiz countdown.
+  for (const ev of ['focus', 'input', 'pointerdown']) $('#endInput').addEventListener(ev, stopCountdown);
+  $('#endMic').addEventListener('pointerdown', stopCountdown);
+  $('#quizNext').onclick = nextQuestion;
+  $('#quizSkip').onclick = () => endQuiz(true);
+  document.addEventListener('keydown', e => {
+    if ($('#quiz').classList.contains('hidden') || e.target.matches('input, textarea')) return;
+    const n = +e.key;
+    if (n >= 1 && n <= 4) { e.preventDefault(); answer(n - 1); }
+    else if (e.key === 'Escape') endQuiz(true);
+  });
   $('#fbHome').onclick = goHome;
 
   document.addEventListener('keydown', e => {
@@ -871,6 +1061,70 @@ function wire() {
     else if (e.key === 'c') $('#ccBtn').click();
     else if (e.key === 'Escape') closeHand();
   });
+
+  // Push-to-talk on "A" (for Ask): hold to speak a question, let go to ask; a quick tap opens the
+  // question box for typing. Works on the home screen, during a lesson and on the end-of-lesson card,
+  // but not while typing in a text box.
+  const HOLD_MS = 250;
+  let ptt = null;
+  const visible = id => !$(id).classList.contains('hidden');
+  const pttContext = () => {
+    if (visible('#quiz')) return null;
+    if (visible('#lesson') && visible('#endQ')) return 'end';
+    if (visible('#lesson')) return 'lesson';
+    if (visible('#home')) return 'home';
+    return null;
+  };
+  const beginPTT = ctx => {
+    const ask = (btn, input, form) => startRecording({ btn: $(btn), input: $(input), autoStop: false }, text => {
+      $(input).value = text;
+      $(form).requestSubmit();
+    });
+    if (ctx === 'home') ask('#homeMic', '#q', '#askForm');
+    else if (ctx === 'end') { stopCountdown(); ask('#endMic', '#endInput', '#endForm'); }
+    else if (ctx === 'lesson') {
+      if (!visible('#handBox')) openHand();
+      ask('#micBtn', '#handQ', '#handForm');
+    }
+  };
+  const isA = e => e.key === 'a' || e.key === 'A';
+  // In the home screen's empty question box, A is held for push-to-talk but a tap (or typing on)
+  // still types the letter.
+  const typeLetter = () => {
+    const { field, char } = ptt;
+    field.setRangeText(char, field.selectionStart, field.selectionEnd, 'end');
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+  document.addEventListener('keydown', e => {
+    if (ptt && !ptt.active && ptt.field && !isA(e)) {
+      // Typing continued while A was down: it was just a letter.
+      clearTimeout(ptt.timer);
+      typeLetter();
+      ptt = null;
+      return;
+    }
+    if (!isA(e) || e.metaKey || e.ctrlKey || e.altKey || $('#settings').open) return;
+    if (ptt) { e.preventDefault(); return; } // key repeat while held
+    const inField = e.target.matches?.('input, textarea, select');
+    const homeBox = e.target.id === 'q' && !e.target.value;
+    if (inField && !homeBox) return;
+    const ctx = pttContext();
+    if (!ctx || recording()) return;
+    e.preventDefault();
+    ptt = { ctx, active: false, field: homeBox ? e.target : null, char: e.key };
+    ptt.timer = setTimeout(() => { ptt.active = true; beginPTT(ctx); }, HOLD_MS);
+  }, true);
+  document.addEventListener('keyup', e => {
+    if (!isA(e) || !ptt) return;
+    e.preventDefault();
+    clearTimeout(ptt.timer);
+    if (ptt.active) stopRecording();
+    else if (ptt.field) typeLetter();
+    else if (ptt.ctx === 'lesson') openHand();
+    else if (ptt.ctx === 'home') $('#q').focus();
+    else if (ptt.ctx === 'end') $('#endInput').focus();
+    ptt = null;
+  }, true);
 
   // Settings
   const dlg = $('#settings');
@@ -944,7 +1198,14 @@ function route() {
   }
   player.stop();
   show('home');
+  clearAsk();
   renderLibrary();
+}
+
+// Fresh question box on returning home (also resets any mic status left in the placeholder).
+function clearAsk() {
+  $('#q').value = '';
+  $('#q').placeholder = `What would you like ${settings.teacher} to teach you? (hold A to talk)`;
 }
 
 (async function init() {

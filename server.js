@@ -248,6 +248,33 @@ async function ttsSlot(fn) {
   try { return await fn(); } finally { ttsActive--; ttsWaiting.shift()?.(); }
 }
 
+async function writeQuiz(id) {
+  let lesson = await loadLesson(id);
+  if (lesson.quiz) return lesson.quiz;
+  // The quiz covers the whole lesson, so make sure every part has been written first.
+  const n = lesson.outline.sections.length;
+  if (!lesson.sections[n - 1]) await api['POST section']({ id, index: n - 1 });
+  lesson = await loadLesson(id);
+  const count = lesson.minutes <= 5 ? 3 : lesson.minutes <= 10 ? 5 : 8;
+  const { json: quiz } = await claudeJson({
+    teacher: lesson.teacher, tone: lesson.tone, model: lesson.model, session: { id: lesson.session, fork: true },
+    prompt: `The lesson has been performed. Now write a short quiz on it: ${count} multiple-choice questions that check
+understanding of the most important ideas you actually taught (not trivia, not anything you didn't cover). Mix
+recall with "why" and "what would happen if" questions. Each has 3 or 4 short choices with exactly one correct.
+Everything is spoken aloud by the teacher's voice as well as shown, so:
+- "q": the question, written naturally (it's shown on screen too, so use digits for numbers and years;
+  just avoid symbols that would sound odd read aloud).
+- "choices": short answer options (shown on screen; also read aloud).
+- "answer": index of the correct choice (0-based).
+- "explain": one or two spoken sentences on why the right answer is right, in your teaching voice (it's said after
+  the student answers, whether they got it right or wrong, so don't start with "Correct" or "Wrong").
+Return: {"questions":[{"q":"...","choices":["..."],"answer":0,"explain":"..."}]}`,
+  });
+  const questions = (quiz.questions || []).filter(q => q.q && Array.isArray(q.choices) && q.choices[q.answer] !== undefined);
+  await updateLesson(id, l => { l.quiz = { questions }; });
+  return { questions };
+}
+
 const api = {
   async 'POST outline'({ topic, minutes = 5, level, tone, teacher, model }) {
     // Screen first: nothing reaches the lesson writer until the topic passes the content policy.
@@ -309,6 +336,23 @@ Return: {"steps":[...]}`,
     return entry;
   },
 
+  // End-of-lesson quiz, written in a fork of the lesson's session (so it knows exactly what was
+  // taught) and saved with the lesson. Deduped like sections, so prefetching is safe.
+  'POST quiz'({ id }) {
+    const key = `${id}:quiz`;
+    if (!inflight.has(key)) {
+      const p = writeQuiz(id);
+      inflight.set(key, p);
+      p.finally(() => inflight.delete(key)).catch(() => {});
+    }
+    return inflight.get(key);
+  },
+
+  async 'POST quizResult'({ id, score, total, answers }) {
+    await updateLesson(id, l => { (l.quizResults ||= []).push({ score, total, answers, at: new Date().toISOString() }); });
+    return { ok: true };
+  },
+
   async 'POST feedback'({ id, liked, text }) {
     await updateLesson(id, l => { l.feedback.push({ liked, text, at: new Date().toISOString() }); });
     return { ok: true };
@@ -332,7 +376,7 @@ Return: {"steps":[...]}`,
         out.push({
           id: l.id, title: l.outline?.title, topic: l.topic, minutes: l.minutes, createdAt: l.createdAt,
           updatedAt: l.updatedAt, parts: l.outline?.sections?.length, written: l.sections.filter(Boolean).length,
-          asides: l.asides.length, progress: l.progress,
+          asides: l.asides.length, progress: l.progress, lastQuiz: l.quizResults?.at(-1) || null,
         });
       } catch {}
     }
@@ -401,7 +445,8 @@ const MIME = {
 function sendFile(res, file) {
   fs.readFile(file, (err, data) => {
     if (err) { res.writeHead(404); return res.end('Not found'); }
-    res.writeHead(200, { 'content-type': MIME[path.extname(file)] || 'application/octet-stream' });
+    // no-cache: always revalidate, so edits to the app show up on a normal reload.
+    res.writeHead(200, { 'content-type': MIME[path.extname(file)] || 'application/octet-stream', 'cache-control': 'no-cache' });
     res.end(data);
   });
 }
