@@ -116,7 +116,7 @@ export function createAccountUI({ api, show, onSignedIn, onShowLessons }) {
       row.className = 'user-row';
       row.innerHTML = `<span class="avatar">${esc(u.avatar)}</span>
         <span class="who"><b>${esc(u.name)}</b><small>${u.role === 'admin' ? 'Admin' : 'Learner'} · ${BANDS[u.ageBand] || ''}${u.locked ? ' · 🔒' : ''}</small></span>
-        <button type="button" class="ghost lessons">Lessons</button>
+        <button type="button" class="ghost lessons">History</button>
         <button type="button" class="ghost edit">Edit</button>`;
       row.querySelector('.edit').onclick = () => editUser(u);
       row.querySelector('.lessons').onclick = () => onShowLessons?.(u);
@@ -175,5 +175,132 @@ export function createAccountUI({ api, show, onSignedIn, onShowLessons }) {
     dlg.showModal();
   }
 
-  return { showSetup, showPicker, askAdminPassword, renderUsers };
+  // ----- admin: content rules -----
+  async function renderPolicies() {
+    const box = $('#adminPolicies');
+    const policies = await api('admin/policies');
+    const names = { master: 'Everyone (master)', ...BANDS };
+    box.innerHTML = `<div class="admin-head"><h2>Content rules</h2></div>
+      <p class="hint">Plain English. Every learner gets the master rules plus their age band's, plus the notes on their profile.
+      Topics and questions are checked against them before anything is written, and lessons follow them. Lines starting with # are notes to yourself.</p>
+      <div class="tabs" id="policyTabs"></div>
+      <textarea id="policyText" rows="14" spellcheck="true"></textarea>
+      <div class="row"><button type="button" id="policySave">Save</button><span id="policyMsg" class="hint"></span></div>`;
+    let current = 'master';
+    const tabs = $('#policyTabs');
+    const select = name => {
+      current = name;
+      tabs.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.name === name));
+      $('#policyText').value = policies[name] || '';
+      $('#policyMsg').textContent = '';
+    };
+    for (const [name, label] of Object.entries(names)) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.dataset.name = name;
+      b.textContent = label;
+      b.onclick = () => select(name);
+      tabs.appendChild(b);
+    }
+    $('#policyText').oninput = () => { policies[current] = $('#policyText').value; $('#policyMsg').textContent = 'Unsaved changes'; };
+    $('#policySave').onclick = async () => {
+      try {
+        await api('admin/policies', { name: current, text: policies[current] }, 'PUT');
+        $('#policyMsg').textContent = 'Saved. Applies from the next question.';
+      } catch (err) { $('#policyMsg').textContent = err.message; }
+    };
+    select('master');
+  }
+
+  // ----- admin: a learner's history -----
+  // Tabs: lessons (rendered by the app's library), questions asked, quiz scores, feedback, turned down.
+  async function renderHistory(u, { renderLessons, extraTabs = {} }) {
+    const box = $('#adminHistory');
+    const h = await api('admin/history?user=' + encodeURIComponent(u.id));
+    const refusals = await api('admin/refusals?user=' + encodeURIComponent(u.id));
+    const quizAvg = h.quizzes.length ? Math.round(100 * h.quizzes.reduce((a, q) => a + q.score / q.total, 0) / h.quizzes.length) : null;
+    const liked = h.feedback.filter(f => f.liked === true).length, disliked = h.feedback.filter(f => f.liked === false).length;
+    box.innerHTML = `<div class="admin-head"><h2>${esc(u.avatar)} ${esc(u.name)}</h2><button type="button" class="ghost" id="historyClose">Close</button></div>
+      <p class="hint">${h.lessons.length} lesson${h.lessons.length === 1 ? '' : 's'} ·
+        ${h.lessons.reduce((a, l) => a + (+l.minutes || 0), 0)} min ·
+        ${h.questions.length} question${h.questions.length === 1 ? '' : 's'} asked ·
+        ${quizAvg === null ? 'no quizzes yet' : `quizzes ${quizAvg}% on average`} ·
+        👍 ${liked} 👎 ${disliked}</p>
+      <div class="tabs" id="historyTabs"></div>
+      <div id="historyBody" class="history-body"></div>`;
+    $('#historyClose').onclick = () => box.replaceChildren();
+    const when = at => (at ? new Date(at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '');
+    const rows = (items, fmt) => {
+      const el = $('#historyBody');
+      el.replaceChildren();
+      if (!items.length) return (el.innerHTML = '<p class="hint">Nothing yet.</p>');
+      for (const it of items) {
+        const row = document.createElement('div');
+        row.className = 'refusal-row';
+        const [main, sub] = fmt(it);
+        row.innerHTML = '<div class="main"></div><div class="said"></div>';
+        row.querySelector('.main').textContent = main;
+        row.querySelector('.said').textContent = sub;
+        el.appendChild(row);
+      }
+    };
+    const tabs = {
+      Lessons: () => renderLessons($('#historyBody')),
+      Questions: () => rows(h.questions, q => [`"${q.question}"`, `${q.lesson} · ${when(q.at)}`]),
+      Quizzes: () => rows(h.quizzes, q => [`${q.score}/${q.total}${q.score === q.total ? ' ★' : ''}  ${q.lesson}`, when(q.at)]),
+      Feedback: () => rows(h.feedback, f => [`${f.liked === true ? '👍' : f.liked === false ? '👎' : '·'} ${f.text || '(no comment)'}`, `${f.lesson} · ${when(f.at)}`]),
+      [`Turned down (${refusals.length})`]: () => rows(refusals, r => [
+        `"${r.text.replace(/^Lesson: ".*?"\. Question: /, '').replace(/^"|"$/g, '')}"`,
+        `${r.message || ''} · ${when(r.at)}`]),
+      'Learning profile': () => renderProfile(u, $('#historyBody')),
+      ...extraTabs,
+    };
+    const tabsEl = $('#historyTabs');
+    for (const [label, render] of Object.entries(tabs)) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.onclick = () => { tabsEl.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); render(); };
+      tabsEl.appendChild(b);
+    }
+    tabsEl.firstChild.click();
+    box.scrollIntoView({ behavior: 'smooth' });
+  }
+
+  // The learner's learning profile: maintained by Claude after lessons, editable here.
+  async function renderProfile(u, el) {
+    const p = await api('admin/profile?user=' + encodeURIComponent(u.id));
+    el.innerHTML = `<p class="hint">How ${esc(u.name)} learns best, kept up to date by the teacher after each lesson and used when
+      writing their lessons. Edit anything. Put your own notes under <b>${esc(p.adminHeading)}</b>: that section is never changed by the teacher.
+      ${p.updatedAt ? `Last updated ${new Date(p.updatedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}.` : 'Nothing yet: it fills in after their first finished lesson.'}</p>
+      <textarea id="profileText" rows="16" spellcheck="true"></textarea>
+      <div class="row"><button type="button" id="profileSave">Save</button><span id="profileMsg" class="hint"></span></div>`;
+    const ta = el.querySelector('#profileText');
+    ta.value = p.text || `${p.adminHeading}\n`;
+    ta.oninput = () => (el.querySelector('#profileMsg').textContent = 'Unsaved changes');
+    el.querySelector('#profileSave').onclick = async () => {
+      try {
+        await api('admin/profile', { user: u.id, text: ta.value }, 'PUT');
+        el.querySelector('#profileMsg').textContent = 'Saved.';
+      } catch (err) { el.querySelector('#profileMsg').textContent = err.message; }
+    };
+  }
+
+  // A learner's refusals, shown under their lessons.
+  async function renderRefusals(u, el) {
+    const list = await api('admin/refusals?user=' + encodeURIComponent(u.id));
+    el.innerHTML = `<h3>Turned down (${list.length})</h3>`;
+    if (!list.length) { el.innerHTML += '<p class="hint">Nothing so far.</p>'; return; }
+    for (const r of list.slice(0, 50)) {
+      const row = document.createElement('div');
+      row.className = 'refusal-row';
+      row.innerHTML = `<div><b></b> <small></small></div><div class="said"></div>`;
+      row.querySelector('b').textContent = `"${r.text.replace(/^Lesson: ".*?"\. Question: /, '').replace(/^"|"$/g, '')}"`;
+      row.querySelector('small').textContent = `${r.kind.includes('question') ? 'question' : 'topic'} · ${new Date(r.at).toLocaleString()}`;
+      row.querySelector('.said').textContent = r.message || '';
+      el.appendChild(row);
+    }
+  }
+
+  return { showSetup, showPicker, askAdminPassword, renderUsers, renderPolicies, renderRefusals, renderHistory };
 }

@@ -16,7 +16,7 @@ See `PLAN.md` for status, decisions and roadmap.
   push-to-talk, end-of-lesson questions, quiz, feedback, settings.
 - `public/index.html`, `public/style.css` — vanilla, no build step.
 - `public/dev/board.html` — dev page that renders a saved lesson's drawings without audio.
-- `content-policy.example.txt` — template for the optional content policy.
+- `policy-defaults/` — starting text for the content policies (copied to `data/policies/`).
 - `lessons/` (gitignored) — saved lessons: `<id>/lesson.json` + `audio/<hash>.mp3|.json`;
   `lessons/_cache/` for audio outside a lesson (voice previews, "Hmm...").
 
@@ -36,8 +36,8 @@ See `PLAN.md` for status, decisions and roadmap.
   run with cwd `~/.whiteboard-teacher/sessions` so it doesn't load this repo's CLAUDE.md or crowd
   its /resume list. Outline first, then parts written in order in that session. Raise-hand
   questions, end-of-lesson questions and the quiz use `--fork-session`.
-- System prompt = teacher persona + optional teaching style (`TONES` in `server.js`) + optional
-  content policy + SCRIPT_API.md. Replies are JSON only, with one retry in the same session.
+- System prompt = teacher persona + optional teaching style (`TONES` in `server.js`) + the
+  learner's content policy + SCRIPT_API.md. Replies are JSON only, with one retry in the same session.
 - A lesson = outline → sections (parts) → steps. Each step is `{ "say": "...", "draw": [ops] }`.
   Ops (1600x900 board): `clear, text, line, rect, circle, ellipse, path, polyline, brace, label, icon,
   dot, move, scale, rotate, highlight, color, fade, erase, stop, group, pause`. Ops in a step are
@@ -57,12 +57,25 @@ See `PLAN.md` for status, decisions and roadmap.
 - Secrets: `ELEVENLABS_API_KEY`, or a 1Password reference read with `op read` at startup
   (set `ELEVENLABS_API_KEY_OP_REF`; needs `OP_SERVICE_ACCOUNT_TOKEN`).
 
-## Content policy
-- Optional `content-policy.txt` (gitignored; `#` lines are comments; re-read on every use).
-- When present, topics and questions are screened by `claude -p --model sonnet` (Haiku was
-  inconsistent) *before* anything is sent to the lesson writer. Refusal → 422
-  `{refused, error, suggestions}`: the message is spoken, suggestions become buttons.
+## Content policies
+- `data/policies/master.txt` (everyone) + one per age band (`under8`, `8-12`, `13-17`, `adult`), seeded
+  from `policy-defaults/` on first run, edited in Admin › Content rules. `#` lines are comments.
+- A learner's policy = master + their band + the admin's notes on their profile (`policyFor(user)`);
+  a lesson uses its owner's (`lessonPolicy`). Re-read on every use.
+- Topics and questions are screened by `claude -p --model sonnet` (Haiku was inconsistent) *before*
+  anything is sent to the lesson writer. Refusal → 422 `{refused, error, suggestions}`: the message is
+  spoken, suggestions become buttons. Refusals are logged to `data/log.jsonl` (Admin › Lessons per learner).
 - The policy is also added to every lesson system prompt, overriding level and style.
+
+## Learning profiles
+- `data/profiles/<user>.md`: plain-English guide to how that learner learns best. Updated by a
+  background `claude -p --model sonnet` call (`updateProfile`) from a lesson's feedback, quiz answers
+  and questions, debounced: 2 min after feedback/quiz, 5 min after finishing (`PROFILE_DELAY_MS`
+  overrides for tests). Previous version kept as `.md.prev`.
+- The `## From the grown-up` section is the admin's: re-inserted verbatim after every update.
+- Added to every lesson/answer/quiz system prompt for that learner. Admin › People › History ›
+  Learning profile to view/edit. Admin › History also shows lessons, questions, quizzes, feedback,
+  refusals (`GET admin/history`, `GET admin/refusals`).
 
 ## End of lesson
 - "Any questions?" (spoken) with a 30s countdown to the quiz; the countdown stops if the student
@@ -76,7 +89,6 @@ See `PLAN.md` for status, decisions and roadmap.
 - Never expose keys to the browser; all model/TTS/STT calls go through `server.js`.
 - Keep first-part latency low: parts are generated on demand and prefetched one ahead.
 - Keys: space play/pause, ←/→ steps, hold A talk / tap A ask, m ask by voice, c captions, 1-4 quiz.
-- Commits are currently unsigned (`git -c commit.gpgsign=false`) until the Secretive signing key is fixed.
 
 ## Testing
 - `public/dev/board.html?lesson=<id>&section=0&upto=6&instant=1` renders a saved lesson's

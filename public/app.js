@@ -1231,10 +1231,9 @@ function clearAsk() {
 
 const account = createAccountUI({
   api, show, onSignedIn: signedIn,
-  onShowLessons: u => {
-    renderLibrary({ el: $('#adminLessons'), user: u, heading: `${u.avatar} ${u.name}'s lessons` });
-    $('#adminLessons').scrollIntoView({ behavior: 'smooth' });
-  },
+  onShowLessons: u => account.renderHistory(u, {
+    renderLessons: el => renderLibrary({ el, user: u, heading: 'Lessons' }),
+  }),
 });
 
 // After sign-in (or on load with a session): load the user's settings and carry on to the app.
@@ -1268,8 +1267,8 @@ function wireAccount() {
   };
   $('#meAdmin').onclick = async () => {
     show('admin');
-    $('#adminLessons').replaceChildren();
-    try { await account.renderUsers(); } catch { goHome(); }
+    $('#adminHistory').replaceChildren();
+    try { await account.renderUsers(); await account.renderPolicies(); } catch { goHome(); }
   };
   $('#adminBack').onclick = goHome;
 }

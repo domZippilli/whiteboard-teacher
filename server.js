@@ -69,9 +69,9 @@ const TONES = {
   goofy: 'Goofy: playful and silly. Puns, absurd analogies, funny doodles on the board, comic timing (use the audio cues: [laughs], [gasps], [whispers], dramatic pauses), maybe a running gag. Still teach the material accurately and completely; the silliness is how you make it stick, not a replacement for substance.',
 };
 
-function system(teacher, tone) {
+function system(teacher, tone, policy, profile = '') {
   return `You are ${teacher || 'Claude'}, a brilliant${TONES[tone] ? '' : ', warm'} teacher giving a live lesson at a whiteboard. You write lessons as scripts that a program performs: your words are spoken by a text-to-speech voice and your drawing is drawn live in sync. Be the teacher you'd most want to learn from: make it vivid, visual and genuinely interesting.
-${TONES[tone] ? `\nYour teaching personality for this lesson, chosen by the student: ${TONES[tone]}\n` : ''}${policyPrompt()}
+${TONES[tone] ? `\nYour teaching personality for this lesson, chosen by the student: ${TONES[tone]}\n` : ''}${policyPrompt(policy)}${profilePrompt(profile)}
 Here is the complete reference for the script format:
 
 ${SCRIPT_API()}
@@ -79,20 +79,35 @@ ${SCRIPT_API()}
 Every reply must be ONLY valid JSON, no prose before or after, no code fences.`;
 }
 
-// ---------- content policy ----------
-// An optional plain-English policy file (content-policy.txt) set by whoever runs the server, e.g.
-// "The learner is 9 years old." When present, every topic and question is screened first, and the
-// policy is part of every lesson-writing prompt. Read on each use, so edits apply immediately.
+// ---------- content policies ----------
+// Plain-English policies in data/policies/: master.txt applies to everyone, plus one per age band.
+// A learner's policy = master + their band + the admin's notes about them. Read on every use, so
+// edits apply immediately. Starting text is copied from policy-defaults/ on first run.
 
-const POLICY_FILE = path.resolve(ROOT, process.env.CONTENT_POLICY || 'content-policy.txt');
-function policy() {
-  try {
-    // Lines starting with # are comments for the person editing the file.
-    return fs.readFileSync(POLICY_FILE, 'utf8').split('\n').filter(l => !l.trim().startsWith('#')).join('\n').trim();
-  } catch { return ''; }
+const POLICIES = path.join(DATA, 'policies');
+const POLICY_NAMES = ['master', ...accounts.AGE_BANDS];
+fs.mkdirSync(POLICIES, { recursive: true });
+for (const n of POLICY_NAMES) {
+  const f = path.join(POLICIES, `${n}.txt`);
+  if (!fs.existsSync(f)) fs.copyFileSync(path.join(ROOT, 'policy-defaults', `${n}.txt`), f);
 }
-function policyPrompt() {
-  const p = policy();
+
+const readPolicy = name => {
+  try { return fs.readFileSync(path.join(POLICIES, `${name}.txt`), 'utf8'); } catch { return ''; }
+};
+// Lines starting with # are notes for whoever edits the file.
+const policyBody = text => text.split('\n').filter(l => !l.trim().startsWith('#')).join('\n').trim();
+
+function policyFor(user) {
+  if (!user) return policyBody(readPolicy('master'));
+  return [
+    policyBody(readPolicy('master')),
+    policyBody(readPolicy(user.ageBand || 'adult')),
+    user.notes?.trim() ? `About this learner (from their parent/teacher): ${user.notes.trim()}` : '',
+  ].filter(Boolean).join('\n\n');
+}
+
+function policyPrompt(p) {
   return p ? `
 CONTENT POLICY (set by the person who runs this app; it overrides the student's chosen level and style
 wherever they conflict). Everything you say and draw must follow it:
@@ -100,13 +115,108 @@ ${p}
 ` : '';
 }
 
+// Refusals, appended to data/log.jsonl for the admin.
+function logRefusal(user, kind, text, message) {
+  const line = JSON.stringify({ at: new Date().toISOString(), user: user?.id, kind, text, message });
+  fs.appendFile(path.join(DATA, 'log.jsonl'), line + '\n', () => {});
+}
+
+// ---------- learning profiles ----------
+// data/profiles/<user>.md: a plain-English guide to how this learner learns best, maintained by Claude
+// after each lesson and editable by the admin. The "## From the grown-up" section is the admin's and
+// is always kept verbatim. Included in that learner's lesson prompts.
+
+const PROFILES = path.join(DATA, 'profiles');
+fs.mkdirSync(PROFILES, { recursive: true });
+const ADMIN_SECTION = '## From the grown-up';
+const profileFile = id => path.join(PROFILES, `${String(id).replace(/[^a-z0-9]/gi, '')}.md`);
+const readProfile = id => { try { return fs.readFileSync(profileFile(id), 'utf8'); } catch { return ''; } };
+
+// Split out the admin's section (heading through the next "## " heading).
+function adminSection(md) {
+  const i = md.indexOf(ADMIN_SECTION);
+  if (i < 0) return '';
+  const rest = md.slice(i + ADMIN_SECTION.length);
+  const j = rest.search(/\n## /);
+  return (ADMIN_SECTION + (j < 0 ? rest : rest.slice(0, j))).trim();
+}
+
+function profilePrompt(md) {
+  md = md.trim();
+  return md ? `
+LEARNING PROFILE for this student (what you've learned about how they learn best, plus notes from their
+parent/teacher). Use it to shape pace, depth, examples, humor and how you use the board. Don't mention it.
+${md}
+` : '';
+}
+
+const profileTimers = new Map();
+// Debounced: a lesson's feedback and quiz usually arrive within a minute or two of each other.
+function scheduleProfileUpdate(lessonId, delayMs = 120000) {
+  if (process.env.PROFILE_DELAY_MS) delayMs = +process.env.PROFILE_DELAY_MS; // for testing
+  clearTimeout(profileTimers.get(lessonId));
+  profileTimers.set(lessonId, setTimeout(() => {
+    profileTimers.delete(lessonId);
+    updateProfile(lessonId).catch(e => console.error('profile update', e.message));
+  }, delayMs));
+}
+
+async function updateProfile(lessonId) {
+  const lesson = await loadLesson(lessonId);
+  const user = accounts.byId(lesson.owner);
+  if (!user) return;
+  const current = readProfile(user.id);
+  const quiz = lesson.quiz?.questions || [];
+  const lastQuiz = lesson.quizResults?.at(-1);
+  const evidence = {
+    lesson: { title: lesson.outline?.title, asked: lesson.topic, minutes: lesson.minutes, style: lesson.tone || 'any', level: lesson.level || 'any', date: lesson.createdAt?.slice(0, 10) },
+    finished: !!lesson.progress && lesson.progress.section >= (lesson.outline?.sections?.length || 1) - 1,
+    questionsAsked: (lesson.asides || []).map(a => a.question),
+    quiz: lastQuiz ? {
+      score: `${lastQuiz.score}/${lastQuiz.total}`,
+      missed: (lastQuiz.answers || []).map((a, i) => (quiz[i] && a !== quiz[i].answer ? { question: quiz[i].q, chose: quiz[i].choices[a], correct: quiz[i].choices[quiz[i].answer] } : null)).filter(Boolean),
+    } : 'skipped or not taken',
+    feedback: (lesson.feedback || []).map(f => ({ liked: f.liked, said: f.text })),
+  };
+  const r = await claudeRun([
+    '--model', process.env.PROFILE_MODEL || 'sonnet', '--no-session-persistence',
+    '--system-prompt', `You maintain a learning profile for one student of a whiteboard teaching app: a short plain-English guide
+for the teacher (an AI that writes their lessons) on how this student learns best. Update it with evidence from
+the lesson they just had. Keep what's still true, revise what the evidence contradicts, and don't over-react to
+one lesson. Be specific and practical ("loves big-number comparisons", "lost interest in long derivations",
+"mixes up mass and weight"). Under ~350 words.
+Use these sections (omit any with nothing to say yet):
+## How they like to learn   (pace, length, drawings vs talking, humor, which teaching styles landed)
+## Interests                (topics they keep coming back to; hooks that work)
+## What they've covered     (brief running list: topic + date + how well it stuck)
+## Watch out for            (misconceptions, sensitivities, things that didn't land)
+Do NOT write a "${ADMIN_SECTION}" section; that one is written by the parent/teacher and kept separately.
+Reply with ONLY the profile markdown.`,
+    `Student: ${user.name}, age band ${user.ageBand}.
+${adminSection(current) ? `The parent/teacher's notes (respect these; they override your inferences):
+${adminSection(current)}
+` : ''}
+Current profile:
+${current.replace(adminSection(current), '').trim() || '(empty: this is their first lesson with a profile)'}
+
+Evidence from the lesson just finished:
+${JSON.stringify(evidence, null, 2)}`,
+  ]);
+  const body = String(r.result || '').replace(/^```(?:markdown)?\n?|```$/g, '').trim();
+  if (!body) return;
+  const admin = adminSection(readProfile(user.id)); // re-read: the admin may have edited meanwhile
+  if (current) await fsp.writeFile(profileFile(user.id) + '.prev', current);
+  await fsp.writeFile(profileFile(user.id), (admin ? admin + '\n\n' : '') + body + '\n');
+  console.log(`profile updated: ${user.name} (${lesson.outline?.title})`);
+}
+
 class Refused extends Error {
   constructor(message, suggestions = []) { super(message); this.suggestions = suggestions; }
 }
 
 // Returns { decision: 'allow' | 'adapt' | 'refuse', message, note }; throws Refused when refused.
-async function screen(text, kind) {
-  const p = policy();
+async function screen(text, kind, user) {
+  const p = policyFor(user);
   if (!p) return { decision: 'allow' };
   const r = await claudeRun([
     '--model', process.env.SCREEN_MODEL || 'sonnet', '--no-session-persistence',
@@ -134,6 +244,7 @@ Reply with ONLY JSON: {"decision":"allow|adapt|refuse","note":"...","message":".
   console.log(`screen ${kind}: ${v.decision} "${text.slice(0, 60)}"${v.note ? ` (${v.note.slice(0, 80)})` : ''}`);
   if (v.decision === 'refuse') {
     const suggestions = (Array.isArray(v.suggestions) ? v.suggestions : []).filter(x => typeof x === 'string' && x.trim()).slice(0, 3);
+    logRefusal(user, kind, text, v.message);
     throw new Refused(v.message || "That's not something I can teach here. Try asking about something else!", suggestions);
   }
   return v;
@@ -162,8 +273,8 @@ function claudeRun(args) {
 
 // Ask within a session and parse the JSON reply; on bad JSON, ask once more in the same session.
 // `session`: { id, create?, fork?, name? }. Returns { json, sessionId }.
-async function claudeJson({ teacher, tone, model, session, prompt }) {
-  const base = ['--model', model || DEFAULT_MODEL, '--system-prompt', system(teacher, tone)];
+async function claudeJson({ teacher, tone, policy, profile, model, session, prompt }) {
+  const base = ['--model', model || DEFAULT_MODEL, '--system-prompt', system(teacher, tone, policy, profile)];
   const first = session.create
     ? ['--session-id', session.id, ...(session.name ? ['-n', session.name] : [])]
     : ['--resume', session.id, ...(session.fork ? ['--fork-session'] : [])];
@@ -202,6 +313,9 @@ async function loadLesson(id) {
 }
 
 const httpError = (status, message) => Object.assign(new Error(message), { status });
+
+// The content policy that applies to a lesson is its learner's (master + band + notes).
+const lessonPolicy = lesson => policyFor(accounts.byId(lesson.owner));
 
 // Load a lesson the signed-in user may use: their own, or any lesson for an admin.
 async function ownLesson(ctx, id) {
@@ -242,7 +356,7 @@ async function writeSection(id, index) {
   const s = outline.sections[index];
   const words = Math.round((minutes * WPM) / n);
   const { json: section } = await inSession(lesson.session, () => claudeJson({
-    teacher: lesson.teacher, tone: lesson.tone, model: lesson.model, session: { id: lesson.session },
+    teacher: lesson.teacher, tone: lesson.tone, policy: lessonPolicy(lesson), profile: readProfile(lesson.owner), model: lesson.model, session: { id: lesson.session },
     prompt: `Write part ${index + 1} of ${n}: "${s.title}". About ${words} spoken words.
 ${index === 0 ? 'This is the opening of the lesson; the board starts empty.' : `Part ${index} has just been performed; the board still shows whatever it left there.`}
 ${index === n - 1 ? 'This is the final part of the lesson.' : ''}
@@ -271,7 +385,7 @@ async function writeQuiz(id) {
   lesson = await loadLesson(id);
   const count = lesson.minutes <= 5 ? 3 : lesson.minutes <= 10 ? 5 : 8;
   const { json: quiz } = await claudeJson({
-    teacher: lesson.teacher, tone: lesson.tone, model: lesson.model, session: { id: lesson.session, fork: true },
+    teacher: lesson.teacher, tone: lesson.tone, policy: lessonPolicy(lesson), profile: readProfile(lesson.owner), model: lesson.model, session: { id: lesson.session, fork: true },
     prompt: `The lesson has been performed. Now write a short quiz on it: ${count} multiple-choice questions that check
 understanding of the most important ideas you actually taught (not trivia, not anything you didn't cover). Mix
 recall with "why" and "what would happen if" questions. Each has 3 or 4 short choices with exactly one correct.
@@ -292,12 +406,12 @@ Return: {"questions":[{"q":"...","choices":["..."],"answer":0,"explain":"..."}]}
 const api = {
   async 'POST outline'({ topic, minutes = 5, level, tone, teacher, model }, _, ctx) {
     // Screen first: nothing reaches the lesson writer until the topic passes the content policy.
-    await screen(topic, 'lesson topic');
+    await screen(topic, 'lesson topic', ctx.user);
     const n = Math.max(1, Math.min(40, Math.round(minutes / 1.75)));
     const session = crypto.randomUUID();
     await fsp.mkdir(SESSIONS, { recursive: true });
     const { json: outline } = await inSession(session, () => claudeJson({
-      teacher, tone, model, session: { id: session, create: true, name: `Lesson: ${topic}`.slice(0, 80) },
+      teacher, tone, policy: policyFor(ctx.user), profile: readProfile(ctx.user.id), model, session: { id: session, create: true, name: `Lesson: ${topic}`.slice(0, 80) },
       prompt: `A student asked: "${topic}"
 Plan a ${minutes}-minute lesson${level ? ` for a ${level} audience` : ''}, split into ${n} part(s) that will each be written separately (about ${Math.round(minutes / n * 10) / 10} minutes of speech each). Shape the lesson however you think teaches it best.
 Return: {"title":"<short lesson title>","sections":[{"title":"...","plan":"<what this part covers and how you intend to show it on the board>"}]}
@@ -330,12 +444,12 @@ I'll then ask you for each part in turn.`,
   async 'POST question'({ id, section, step, question, recent }, _, ctx) {
     const lesson = await ownLesson(ctx, id);
     // Screen first, as for topics.
-    await screen(`Lesson: "${lesson.outline.title}". Question: "${question}"`, "student's question during a lesson");
+    await screen(`Lesson: "${lesson.outline.title}". Question: "${question}"`, "student's question during a lesson", accounts.byId(lesson.owner));
     // Fork the lesson session so the aside knows the whole lesson without blocking the next part.
     const last = lesson.outline.sections.length - 1;
     const atEnd = section >= last && step >= (lesson.sections[last]?.steps?.length || 0);
     const { json: aside } = await claudeJson({
-      teacher: lesson.teacher, tone: lesson.tone, model: lesson.model, session: { id: lesson.session, fork: true },
+      teacher: lesson.teacher, tone: lesson.tone, policy: lessonPolicy(lesson), profile: readProfile(lesson.owner), model: lesson.model, session: { id: lesson.session, fork: true },
       prompt: atEnd
         ? `The lesson has been performed to the end, and you asked the student if they had any questions.
 They asked: "${question}"
@@ -368,18 +482,23 @@ Return: {"steps":[...]}`,
   async 'POST quizResult'({ id, score, total, answers }, _, ctx) {
     await ownLesson(ctx, id);
     await updateLesson(id, l => { (l.quizResults ||= []).push({ score, total, answers, at: new Date().toISOString() }); });
+    scheduleProfileUpdate(id);
     return { ok: true };
   },
 
   async 'POST feedback'({ id, liked, text }, _, ctx) {
     await ownLesson(ctx, id);
     await updateLesson(id, l => { l.feedback.push({ liked, text, at: new Date().toISOString() }); });
+    scheduleProfileUpdate(id);
     return { ok: true };
   },
 
   async 'POST progress'({ id, section, step }, _, ctx) {
     await ownLesson(ctx, id);
-    await updateLesson(id, l => { l.progress = { section, step }; });
+    const l = await updateLesson(id, l => { l.progress = { section, step }; });
+    // Finished the last part: update their learning profile (debounced, so feedback/quiz get included).
+    const last = l.outline.sections.length - 1;
+    if (section >= last && step >= (l.sections[last]?.steps?.length || Infinity)) scheduleProfileUpdate(id, 300000);
     return { ok: true };
   },
 
@@ -476,8 +595,59 @@ Return: {"steps":[...]}`,
     return { ok: true };
   },
 
+  async 'GET admin/policies'() {
+    return Object.fromEntries(POLICY_NAMES.map(n => [n, readPolicy(n)]));
+  },
+
+  async 'PUT admin/policies'({ name, text }) {
+    if (!POLICY_NAMES.includes(name)) throw httpError(400, 'Unknown policy');
+    await fsp.writeFile(path.join(POLICIES, `${name}.txt`), String(text ?? ''));
+    return { ok: true };
+  },
+
+  // Everything a learner has done, for the admin: lessons, questions asked, quiz scores, feedback.
+  async 'GET admin/history'(_, q) {
+    const user = q.get('user');
+    const out = { lessons: [], questions: [], quizzes: [], feedback: [] };
+    for (const d of await fsp.readdir(LESSONS).catch(() => [])) {
+      let l;
+      try { l = await loadLesson(d); } catch { continue; }
+      if (l.owner !== user) continue;
+      const title = l.outline?.title || l.topic;
+      out.lessons.push({ id: l.id, title, topic: l.topic, minutes: l.minutes, tone: l.tone, createdAt: l.createdAt });
+      for (const a of l.asides || []) out.questions.push({ lesson: title, lessonId: l.id, question: a.question, at: a.askedAt });
+      for (const r of l.quizResults || []) out.quizzes.push({ lesson: title, lessonId: l.id, score: r.score, total: r.total, at: r.at });
+      for (const f of l.feedback || []) out.feedback.push({ lesson: title, lessonId: l.id, liked: f.liked, text: f.text, at: f.at });
+    }
+    const newest = (a, b) => String(b.at || b.createdAt).localeCompare(String(a.at || a.createdAt));
+    for (const k of Object.keys(out)) out[k].sort(newest);
+    return out;
+  },
+
+  async 'GET admin/profile'(_, q) {
+    const f = profileFile(q.get('user'));
+    let updatedAt = null;
+    try { updatedAt = (await fsp.stat(f)).mtime; } catch {}
+    return { text: readProfile(q.get('user')), updatedAt, adminHeading: ADMIN_SECTION };
+  },
+
+  async 'PUT admin/profile'({ user, text }) {
+    if (!accounts.byId(user)) throw httpError(404, 'No such learner');
+    await fsp.writeFile(profileFile(user), String(text ?? ''));
+    return { ok: true };
+  },
+
+  // Refusals for one learner (or everyone), newest first.
+  async 'GET admin/refusals'(_, q) {
+    let lines = [];
+    try { lines = (await fsp.readFile(path.join(DATA, 'log.jsonl'), 'utf8')).trim().split('\n'); } catch {}
+    const user = q.get('user');
+    return lines.filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } })
+      .filter(r => r && (!user || r.user === user)).reverse().slice(0, 200);
+  },
+
   async 'GET config'() {
-    return { model: DEFAULT_MODEL, tts: !!ELEVENLABS_API_KEY, voice: DEFAULT_VOICE, policy: !!policy() };
+    return { model: DEFAULT_MODEL, tts: !!ELEVENLABS_API_KEY, voice: DEFAULT_VOICE };
   },
 
   async 'GET voices'() {

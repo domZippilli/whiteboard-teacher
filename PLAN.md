@@ -63,7 +63,7 @@ Browser (public/)                          server.js                      extern
 - Library on the home screen: resume where you left off, last quiz score badge, delete.
 - Questions asked are saved as markers on the timeline; click to replay them.
 
-**Content policy** (optional `content-policy.txt`, plain English, e.g. "the learner is 10")
+**Content policy** (V1 had one optional `content-policy.txt`; V1.5 replaces it with master + age-band policies)
 - Topics and questions are screened by Sonnet *before* anything is sent to the lesson writer.
 - Refusals are spoken kindly (playful for cheeky requests) with 2-3 suggested safe topics as buttons.
 - The policy is added to every lesson prompt, overriding level/style.
@@ -132,11 +132,11 @@ Needed before learning profiles: the app will move to the homelab and be used fr
 - Profile: view/edit each learner's learning profile.
 
 **Build order**
-1. Accounts & sessions: users store, setup screen, profile picker, PINs, cookies, authz on every
+1. ✅ Accounts & sessions: users store, setup screen, profile picker, PINs, cookies, authz on every
    endpoint, lesson ownership; discard old lessons.
-2. Policies: master + age bands + notes; migration from `content-policy.txt`; refusal log.
-3. Admin pages: users, policies, history.
-4. Learning profiles: auto-update after lessons, used in prompts, admin view/edit.
+2. ✅ Policies: master + age bands + notes; migration from `content-policy.txt`; refusal log.
+3. ✅ Admin pages: users, policies, history.
+4. ✅ Learning profiles: auto-update after lessons, used in prompts, admin view/edit.
 5. Homelab: `tailscale serve` HTTPS, run as a service, PWA manifest + icon, setup notes.
 
 ## Next (polish)
@@ -156,8 +156,6 @@ Needed before learning profiles: the app will move to the homelab and be used fr
     the session and says so quietly in settings.
 
 ## V2
-- **Learning style profile.** Turn post-lesson feedback (already collected) into a per-learner
-  style guide (`profile/style.md`) that Claude maintains and includes when writing lessons: pace,
-  amount of drawing vs talking, analogies, maths depth, humour, and so on. Viewable and editable.
-  Possibly several modes per learner (e.g. "quick overview" vs "deep dive").
-- **Quiz follow-ups.** Feed quiz results and weak spots into the profile and suggest follow-up lessons.
+- ~~Learning style profile~~ (done in V1.5). Maybe: several modes per learner ("quick overview" vs "deep dive").
+- **Quiz follow-ups.** Quiz results and misses already feed the profile; next: suggest follow-up
+  lessons on the home screen ("You mixed up birds and crocodiles. Want a 3-minute lesson on it?").

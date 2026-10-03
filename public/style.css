@@ -222,3 +222,29 @@ button.danger { color: #d23a2f !important; margin-left: auto; }
 .user-row button { border-radius: 999px; padding: 6px 14px; }
 #userForm label, .pin-form label { margin: 0; }
 #userForm input[type=checkbox] { display: inline-block; width: auto; margin: 0; }
+
+/* Admin: content rules + refusals */
+.policies { margin-top: 36px; display: flex; flex-direction: column; gap: 10px; }
+.policies .hint { margin: 0; }
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.tabs button { border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: 999px; padding: 6px 14px; font-size: 14px; }
+.tabs button.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+#policyText { font: 15px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); color: var(--ink); resize: vertical; }
+#policySave { border: 0; border-radius: 999px; padding: 8px 20px; background: var(--accent); color: white; font-weight: 600; }
+.policies .row { align-items: center; }
+.refusals { margin-top: 18px; }
+.refusal-row { background: var(--card); border-radius: 10px; padding: 10px 14px; margin-bottom: 6px; }
+.refusal-row small { color: var(--muted); }
+.refusal-row .said { color: var(--muted); font-size: 14px; margin-top: 4px; }
+
+.history { margin-top: 28px; display: flex; flex-direction: column; gap: 10px; }
+.history:empty { display: none; }
+.history .hint { margin: 0; }
+.history-body { min-height: 60px; }
+.history-body .library { margin-top: 0; }
+.refusal-row .main { white-space: pre-wrap; }
+#historyClose { border-radius: 999px; padding: 6px 14px; }
+
+#profileText { width: 100%; font: 15px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); color: var(--ink); resize: vertical; margin: 8px 0; }
+#profileSave { border: 0; border-radius: 999px; padding: 8px 20px; background: var(--accent); color: white; font-weight: 600; }
+.history-body .row { align-items: center; }
