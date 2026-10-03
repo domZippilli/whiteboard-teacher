@@ -143,6 +143,8 @@ Needed before learning profiles: the app will move to the homelab and be used fr
 - **Faster start**: stream part 1 so playback begins within seconds instead of 30-60s.
 - **Layout safety net**: renderer-side bounds clamping / overlap nudging, without constraining the model.
 - **Library**: search, export/share a lesson.
+- **Configurable backends** (lessons, voice, listening; admin-level, server-wide): see
+  `PLAN-CONFIGURABLE-BACKENDS.md`. Covers the Kokoro idea below.
 - **Kokoro TTS fallback** (ElevenLabs is expensive). Use Kokoro (82M-parameter open TTS) when
   ElevenLabs is unreachable or errors (e.g. out of credits), or when chosen in settings.
   - In-browser option: `kokoro-js` (transformers.js) loaded as an ES module from a CDN; WebGPU where
