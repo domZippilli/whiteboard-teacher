@@ -2,7 +2,9 @@
   "name": "Whiteboard Teacher",
   "short_name": "Teacher",
   "start_url": "/",
-  "display": "standalone",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "landscape",
   "background_color": "#f4f1ea",
   "theme_color": "#1f5fbf",
   "icons": [
