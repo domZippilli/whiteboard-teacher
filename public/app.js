@@ -661,9 +661,67 @@ function caption(text) {
   c.textContent = text;
   c.classList.toggle('hidden', !settings.captions || !text);
 }
+// The loading doodle's squiggle: a new random one each time the pencil starts over, in a 220x80 box.
+const rnd = (a, b) => a + Math.random() * (b - a);
+const f1 = n => n.toFixed(1);
+const SQUIGGLES = {
+  // Smooth waves of varying height and length.
+  waves() {
+    let x = 10, y = rnd(35, 50), up = Math.random() < 0.5, d = `M ${f1(x)} ${f1(y)}`;
+    while (x < 196) {
+      const w = rnd(22, 46), h = rnd(12, 30) * (up ? -1 : 1), nx = Math.min(212, x + w), ny = rnd(38, 48);
+      d += ` C ${f1(x + w * 0.35)} ${f1(y + h)} ${f1(nx - w * 0.35)} ${f1(ny + h)} ${f1(nx)} ${f1(ny)}`;
+      x = nx; y = ny; up = !up;
+    }
+    return d;
+  },
+  // Loop-de-loops, like a curly telephone cord.
+  loops() {
+    let x = 10, y = rnd(54, 62), d = `M ${f1(x)} ${f1(y)}`;
+    while (x < 186) {
+      const w = rnd(26, 38), h = rnd(38, 50), nx = Math.min(212, x + w), ny = y + rnd(-4, 4);
+      d += ` C ${f1(x + w * 2.3)} ${f1(y - h)} ${f1(x - w * 1.3)} ${f1(y - h)} ${f1(nx)} ${f1(ny)}`;
+      x = nx; y = Math.max(52, Math.min(64, ny));
+    }
+    return d;
+  },
+  // Quick tight wiggles.
+  wiggles() {
+    let x = 10, y = rnd(38, 46), up = true, d = `M ${f1(x)} ${f1(y)}`;
+    while (x < 200) {
+      const w = rnd(9, 16), h = rnd(8, 20) * (up ? -1 : 1), nx = Math.min(212, x + w);
+      d += ` Q ${f1(x + w / 2)} ${f1(y + h * 2)} ${f1(nx)} ${f1(y)}`;
+      x = nx; up = !up;
+    }
+    return d;
+  },
+  // A scribbly zigzag.
+  zigzag() {
+    let x = 10, y = rnd(40, 50), up = Math.random() < 0.5, d = `M ${f1(x)} ${f1(y)}`;
+    while (x < 196) {
+      const w = rnd(14, 30), nx = Math.min(212, x + w), ny = up ? rnd(14, 28) : rnd(56, 70);
+      d += ` Q ${f1(x + w * 0.5)} ${f1((y + ny) / 2 + rnd(-6, 6))} ${f1(nx)} ${f1(ny)}`;
+      x = nx; y = ny; up = !up;
+    }
+    return d;
+  },
+};
+function newSquiggle() {
+  const kinds = Object.keys(SQUIGGLES);
+  let kind;
+  do kind = kinds[Math.floor(Math.random() * kinds.length)]; while (kinds.length > 1 && kind === newSquiggle.last);
+  newSquiggle.last = kind;
+  const d = SQUIGGLES[kind]();
+  $('#prep .squiggle').setAttribute('d', d);
+  $('#prep .pencil').style.offsetPath = `path('${d}')`;
+}
+// Each loop of the animation ends with the squiggle faded out: swap in a new one then.
+$('#prep .squiggle').addEventListener('animationiteration', newSquiggle);
+
 // kind: 'lesson' or 'question' picks the quips; errors hide the animation.
 function showPrep(text, error, kind = 'lesson') {
   const wasHidden = $('#prep').classList.contains('hidden');
+  if (wasHidden) newSquiggle();
   $('#prep').classList.remove('hidden');
   $('#prepText').textContent = text;
   $('#prep .doodle').classList.toggle('hidden', !!error);
@@ -1230,14 +1288,24 @@ function wire() {
     if (!ctx || recording()) return;
     e.preventDefault();
     ptt = { ctx, active: false, field: emptyBox ? e.target : null, char: e.key };
-    ptt.timer = setTimeout(() => { ptt.active = true; beginPTT(ctx); }, HOLD_MS);
+    ptt.timer = setTimeout(() => {
+      ptt.active = true;
+      beginPTT(ctx);
+      // macOS shows its accent picker when a key is held in a focused text box: leave the box while
+      // talking (beginPTT may have just opened and focused one), and come back on release.
+      const el = document.activeElement;
+      if (el?.matches?.('input, textarea')) { ptt.refocus = el; el.blur(); }
+    }, HOLD_MS);
   }, true);
   document.addEventListener('keyup', e => {
     if (!isA(e) || !ptt) return;
     e.preventDefault();
     clearTimeout(ptt.timer);
-    if (ptt.active) stopRecording();
-    else if (ptt.field) typeLetter();
+    if (ptt.active) {
+      stopRecording();
+      const el = ptt.refocus;
+      if (el && el.offsetParent) el.focus();
+    } else if (ptt.field) typeLetter();
     else if (ptt.ctx === 'lesson') openHand();
     else if (ptt.ctx === 'home') $('#q').focus();
     else if (ptt.ctx === 'end') $('#endInput').focus();
