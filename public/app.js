@@ -1176,7 +1176,7 @@ function wire() {
 
   // Push-to-talk on "A" (for Ask): hold to speak a question, let go to ask; a quick tap opens the
   // question box for typing. Works on the home screen, during a lesson and on the end-of-lesson card,
-  // but not while typing in a text box.
+  // but not while typing in a text box (an empty question box doesn't count as typing).
   const HOLD_MS = 250;
   let ptt = null;
   const visible = id => !$(id).classList.contains('hidden');
@@ -1205,8 +1205,9 @@ function wire() {
     }
   };
   const isA = e => e.key === 'a' || e.key === 'A';
-  // In the home screen's empty question box, A is held for push-to-talk but a tap (or typing on)
-  // still types the letter.
+  // In an empty question box (home, raise-hand, end of lesson), A is held for push-to-talk but a tap
+  // (or typing on) still types the letter.
+  const PTT_BOXES = ['q', 'handQ', 'endInput'];
   const typeLetter = () => {
     const { field, char } = ptt;
     field.setRangeText(char, field.selectionStart, field.selectionEnd, 'end');
@@ -1223,12 +1224,12 @@ function wire() {
     if (!isA(e) || e.metaKey || e.ctrlKey || e.altKey || $('#settings').open) return;
     if (ptt) { e.preventDefault(); return; } // key repeat while held
     const inField = e.target.matches?.('input, textarea, select');
-    const homeBox = e.target.id === 'q' && !e.target.value;
-    if (inField && !homeBox) return;
+    const emptyBox = PTT_BOXES.includes(e.target.id) && !e.target.value;
+    if (inField && !emptyBox) return;
     const ctx = pttContext();
     if (!ctx || recording()) return;
     e.preventDefault();
-    ptt = { ctx, active: false, field: homeBox ? e.target : null, char: e.key };
+    ptt = { ctx, active: false, field: emptyBox ? e.target : null, char: e.key };
     ptt.timer = setTimeout(() => { ptt.active = true; beginPTT(ctx); }, HOLD_MS);
   }, true);
   document.addEventListener('keyup', e => {
