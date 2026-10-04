@@ -33,7 +33,7 @@ let config = { tts: false };
 function applyName() {
   $('#teacherName').textContent = settings.teacher;
   document.title = `Ask ${settings.teacher}`;
-  $('#q').placeholder = `What would you like ${settings.teacher} to teach you?${config.listening ? ' (hold A to talk)' : ''}`;
+  $('#q').placeholder = `What would you like ${settings.teacher} to teach you?${config.listening && !touchScreen() ? ' (hold A to talk)' : ''}`;
 }
 
 // ---------- speech ----------
@@ -218,22 +218,30 @@ async function sayText(text) {
 }
 
 // ---------- speaking questions ----------
-// Click the mic to record, click again (or pause speaking) to stop; the transcript is then asked.
+// Hold a mic button (or A) to talk and let go to ask; or tap it and it stops by itself after a pause.
 
 const mic = { rec: null, stream: null, stopTimer: null };
+// Touch screens: no hardware A key, and focusing a box pops up the on-screen keyboard.
+function touchScreen() { return matchMedia('(pointer: coarse)').matches; }
+function talkHint() { return touchScreen() ? 'hold 🎤 to talk' : 'hold A to talk'; }
 // btn: the mic button (shows recording state); input: where status shows as placeholder.
-// autoStop: stop after a pause in speech (off for push-to-talk, where releasing the key stops it).
-async function startRecording({ btn, input, autoStop = true }, onText) {
+// autoStop: stop after a pause in speech (off while held, where letting go stops it); can be
+// switched on mid-recording with handsFree(). hint: placeholder while held.
+async function startRecording({ btn, input, autoStop = true, hint = 'Listening… (let go to ask)' }, onText) {
   mic.wantStop = false;
+  mic.pending = true;
+  mic.autoStop = autoStop;
+  mic.hint = hint;
+  mic.input = input;
   try {
     mic.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-  } catch (e) { input.placeholder = 'Microphone blocked; type your question'; return; }
+  } catch (e) { mic.pending = false; input.placeholder = 'Microphone blocked; type your question'; return; }
   const type = ['audio/webm;codecs=opus', 'audio/mp4'].find(t => MediaRecorder.isTypeSupported(t)) || '';
   const rec = (mic.rec = new MediaRecorder(mic.stream, type ? { mimeType: type } : {}));
   const chunks = [];
   rec.ondataavailable = e => e.data.size && chunks.push(e.data);
   btn.classList.add('rec');
-  input.placeholder = autoStop ? 'Listening… (click 🎤 to finish)' : 'Listening… (let go of A to ask)';
+  listeningHint();
 
   // Level meter + auto-stop after ~1.8s of silence once you've started talking.
   audioCtx ||= new AudioContext();
@@ -250,7 +258,7 @@ async function startRecording({ btn, input, autoStop = true }, onText) {
     const rms = Math.sqrt(buf.reduce((a, v) => a + v * v, 0) / buf.length);
     btn.style.setProperty('--level', Math.min(1, rms * 8).toFixed(2));
     if (rms > 0.015) { spoke = true; quietSince = performance.now(); }
-    else if (autoStop && spoke && performance.now() - quietSince > 1800) return stopRecording();
+    else if (mic.autoStop && spoke && performance.now() - quietSince > 1800) return stopRecording();
     requestAnimationFrame(meter);
   };
   meter();
@@ -282,6 +290,7 @@ async function startRecording({ btn, input, autoStop = true }, onText) {
     } finally { btn.classList.remove('busy'); }
   };
   rec.start();
+  mic.pending = false;
   if (mic.wantStop) rec.stop(); // push-to-talk key already released
 }
 function stopRecording() {
@@ -289,6 +298,40 @@ function stopRecording() {
   else mic.wantStop = true; // released before the mic was ready
 }
 const recording = () => mic.rec?.state === 'recording';
+const listeningHint = () => {
+  if (mic.input) mic.input.placeholder = mic.autoStop ? 'Listening… (stops when you pause, or tap 🎤)' : mic.hint;
+};
+// A quick tap rather than a hold: keep listening until a pause.
+function handsFree() { mic.autoStop = true; listeningHint(); }
+
+// Wire a mic button: hold to talk, let go to ask; a tap listens until you pause (tap again to
+// finish sooner). Keyboard activation (Enter/Space on the focused button) acts as a tap.
+const HOLD_TO_TALK_MS = 350;
+function micButton(btn, input, onText, before) {
+  let downAt = 0;
+  const start = autoStop => { before?.(); startRecording({ btn, input, autoStop }, onText); };
+  btn.addEventListener('contextmenu', e => e.preventDefault()); // long-press menu on touch screens
+  btn.addEventListener('pointerdown', e => {
+    if (e.button) return;
+    e.preventDefault(); // keep focus (and any on-screen keyboard) where it is
+    if (recording() || mic.pending) { stopRecording(); return; }
+    btn.setPointerCapture?.(e.pointerId);
+    downAt = performance.now();
+    start(false);
+  });
+  const up = () => {
+    if (!downAt) return;
+    const held = performance.now() - downAt;
+    downAt = 0;
+    if (held >= HOLD_TO_TALK_MS) stopRecording(); else handsFree();
+  };
+  btn.addEventListener('pointerup', up);
+  btn.addEventListener('pointercancel', up);
+  btn.addEventListener('click', e => {
+    if (e.detail) return; // pointer clicks are handled above
+    if (recording() || mic.pending) stopRecording(); else start(true);
+  });
+}
 
 // ---------- loading quips ----------
 
@@ -1152,13 +1195,10 @@ function wire() {
   $('#tone').onchange = () => { settings.tone = $('#tone').value; saveSettings(); };
 
   // Mic on the home screen: speak a topic, and the lesson starts once it's transcribed.
-  $('#homeMic').onclick = () => {
-    if (recording()) return stopRecording();
-    startRecording({ btn: $('#homeMic'), input: $('#q') }, text => {
-      $('#q').value = text;
-      $('#askForm').requestSubmit();
-    });
-  };
+  micButton($('#homeMic'), $('#q'), text => {
+    $('#q').value = text;
+    $('#askForm').requestSubmit();
+  });
 
   $('#homeBtn').onclick = goHome;
   $('#startGo').onclick = () => {
@@ -1183,23 +1223,50 @@ function wire() {
     $('#handBox').classList.remove('hidden');
     $('#handQ').value = '';
     $('#handQ').placeholder = askHint();
-    $('#handQ').focus();
+    // On a touch screen focusing would pop up the keyboard over the board; the mic is right there.
+    if (!touchScreen()) $('#handQ').focus();
     if (listen) toggleMic();
   };
   const closeHand = () => { stopRecording(); mic.rec = null; $('#handBox').classList.add('hidden'); };
   // Spoken questions are asked as soon as they're transcribed.
+  const askHand = text => {
+    $('#handQ').value = text;
+    $('#handForm').requestSubmit();
+  };
   const toggleMic = () => {
     if (recording()) return stopRecording();
-    startRecording({ btn: $('#micBtn'), input: $('#handQ') }, text => {
-      $('#handQ').value = text;
-      $('#handForm').requestSubmit();
-    });
+    startRecording({ btn: $('#micBtn'), input: $('#handQ') }, askHand);
   };
-  $('#micBtn').onclick = toggleMic;
+  micButton($('#micBtn'), $('#handQ'), askHand);
   $('#handQ').addEventListener('keydown', e => {
     if (e.key === 'Escape') { closeHand(); if (player.paused) player.togglePause(); }
   });
-  $('#handBtn').onclick = () => openHand();
+  // ✋ works like the A key: tap to open the question box, hold to talk.
+  {
+    const btn = $('#handBtn');
+    let hold = null;
+    btn.addEventListener('contextmenu', e => e.preventDefault());
+    btn.addEventListener('pointerdown', e => {
+      if (e.button || !config.listening) return;
+      e.preventDefault();
+      btn.setPointerCapture?.(e.pointerId);
+      hold = { timer: setTimeout(() => {
+        hold.talking = true;
+        openHand();
+        startRecording({ btn: $('#micBtn'), input: $('#handQ'), autoStop: false }, askHand);
+      }, HOLD_TO_TALK_MS) };
+    });
+    const up = () => {
+      if (!hold) return;
+      clearTimeout(hold.timer);
+      if (hold.talking) stopRecording(); else openHand();
+      hold = null;
+    };
+    btn.addEventListener('pointerup', up);
+    btn.addEventListener('pointercancel', up);
+    // Keyboard, or no mic (pointerdown above did nothing): a plain click.
+    btn.addEventListener('click', e => { if (!e.detail || !config.listening) openHand(); });
+  }
   $('#handCancel').onclick = () => { closeHand(); if (player.paused) player.togglePause(); };
   $('#handForm').onsubmit = e => {
     e.preventDefault();
@@ -1230,18 +1297,14 @@ function wire() {
     hideEndQuestions();
     player.askAtEnd(q);
   };
-  $('#endMic').onclick = () => {
-    if (recording()) return stopRecording();
-    startRecording({ btn: $('#endMic'), input: $('#endInput') }, text => {
-      $('#endInput').value = text;
-      $('#endForm').requestSubmit();
-    });
-  };
+  micButton($('#endMic'), $('#endInput'), text => {
+    $('#endInput').value = text;
+    $('#endForm').requestSubmit();
+  }, stopCountdown);
   $('#endSkip').onclick = () => { hideEndQuestions(); lineAudio.pause(); showFeedback(); };
   $('#endQuiz').onclick = () => { hideEndQuestions(); lineAudio.pause(); startQuiz(); };
   // Any sign the student wants to ask something stops the quiz countdown.
   for (const ev of ['focus', 'input', 'pointerdown']) $('#endInput').addEventListener(ev, stopCountdown);
-  $('#endMic').addEventListener('pointerdown', stopCountdown);
   $('#quizNext').onclick = nextQuestion;
   $('#quizSkip').onclick = () => endQuiz(true);
   document.addEventListener('keydown', e => {
@@ -1282,7 +1345,7 @@ function wire() {
       if (ctx === 'lesson') openHand(); else if (ctx === 'home') $('#q').focus(); else $('#endInput').focus();
       return;
     }
-    const ask = (btn, input, form) => startRecording({ btn: $(btn), input: $(input), autoStop: false }, text => {
+    const ask = (btn, input, form) => startRecording({ btn: $(btn), input: $(input), autoStop: false, hint: 'Listening… (let go of A to ask)' }, text => {
       $(input).value = text;
       $(form).requestSubmit();
     });
@@ -1428,7 +1491,7 @@ function route() {
 }
 
 // Mic buttons only when a listening backend is set up.
-const askHint = () => (config.listening ? 'Type, or hold A to talk' : 'Type your question');
+const askHint = () => (config.listening ? `Type, or ${talkHint()}` : 'Type your question');
 function applyListening() {
   for (const id of ['#homeMic', '#micBtn', '#endMic']) $(id).classList.toggle('hidden', !config.listening);
   applyName();
@@ -1437,7 +1500,7 @@ function applyListening() {
 // Fresh question box on returning home (also resets any mic status left in the placeholder).
 function clearAsk() {
   $('#q').value = '';
-  $('#q').placeholder = `What would you like ${settings.teacher} to teach you?${config.listening ? ' (hold A to talk)' : ''}`;
+  $('#q').placeholder = `What would you like ${settings.teacher} to teach you?${config.listening && !touchScreen() ? ' (hold A to talk)' : ''}`;
 }
 
 // ---------- accounts ----------

@@ -17,7 +17,7 @@
 html, body { margin: 0; height: 100%; background: var(--bg); }
 button { font: inherit; cursor: pointer; }
 .hidden { display: none !important; }
-.screen { height: 100vh; display: flex; flex-direction: column; }
+.screen { height: 100vh; height: 100dvh; display: flex; flex-direction: column; }
 
 /* Home */
 #home { align-items: center; overflow-y: auto; }
@@ -121,6 +121,8 @@ dialog input:not([type=range]), dialog select { display: block; width: 100%; mar
   position: relative; --level: 0; }
 .ask button.mic.rec, .hand button.mic.rec { background: #d23a2f; border-color: #d23a2f; box-shadow: 0 0 0 calc(4px + var(--level) * 14px) rgba(210,58,47,.25); }
 .ask button.mic.busy, .hand button.mic.busy { opacity: .6; }
+/* Held to talk: no text selection, callout or scrolling from the press. */
+button.mic, .hand-btn { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: none; }
 
 .end-card { width: min(620px, 92%); display: flex; flex-direction: column; gap: 14px; align-items: stretch; }
 .end-card h2 { margin: 0; font-family: 'Patrick Hand', cursive; font-weight: 400; font-size: 34px; }
@@ -319,3 +321,35 @@ button.danger { color: #d23a2f !important; margin-left: auto; }
 #adminBackends .save-row .msg { font-size: 14px; color: var(--muted); }
 #adminBackends .save-row.dirty .msg { color: #b26a00; font-weight: 600; }
 #adminBackends .save-row .msg.error { color: #c0392b; font-weight: 600; }
+
+/* Touch screens (tablets, phones): finger-sized controls, the mic as the main way to ask. */
+@media (pointer: coarse) {
+  .ask { padding: 6px 6px 6px 20px; align-items: center; }
+  .ask input, .hand input { font-size: 20px; }
+  .ask button, .hand button { padding: 14px 22px; font-size: 18px; }
+  .ask button.mic, .hand button.mic { width: 58px; height: 58px; padding: 0; font-size: 26px; border-radius: 50%; flex: none; }
+  .chips button, .options select { padding: 10px 18px; font-size: 16px; }
+  .icon-btn { font-size: 26px; min-width: 48px; min-height: 48px; }
+  .icon-btn.big { font-size: 30px; }
+  .controls { gap: 8px; padding: 8px 16px 12px; }
+  .timeline { height: 14px; }
+  .hand-btn { padding: 12px 24px; font-size: 20px; font-weight: 600; }
+  .lesson-row { padding: 14px 12px; }
+  .lesson-row .del { visibility: visible; font-size: 18px; padding: 6px 10px; }
+  .me-chip { padding: 8px 16px 8px 8px; font-size: 17px; }
+  .choices button { padding: 16px 16px; font-size: 19px; }
+  .end-card .row button, .refusal-card .row button { padding: 12px 22px; font-size: 17px; }
+  .thumbs button { padding: 12px 22px; }
+}
+/* Short landscape screens (phones): less space above the question box, slimmer bars. */
+@media (max-height: 520px) {
+  .home-inner { margin-top: 64px; }
+  .teacher-name { font-size: clamp(44px, 14vh, 72px); margin-bottom: 12px; }
+  .topbar { padding: 2px 12px; }
+  .topbar .title { font-size: 20px; }
+  .controls { padding: 4px 12px 6px; }
+  .stage { padding: 0 8px; }
+  #board { border-width: 6px; }
+  .hand, #endQ, #start, #prep.low { padding-bottom: 12px; }
+  .prep-card, .feedback { padding: 16px 20px; max-height: 100%; overflow-y: auto; }
+}
