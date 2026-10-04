@@ -145,6 +145,8 @@ function profilePrompt(md) {
   return md ? `
 LEARNING PROFILE for this student (what you've learned about how they learn best, plus notes from their
 parent/teacher). Use it to shape pace, depth, examples, humor and how you use the board. Don't mention it.
+Each lesson stands on its own and may be replayed later, in any order: don't refer to, recap or quiz them on
+their other lessons ("last time…"). What they've covered only tells you what they already know.
 ${md}
 ` : '';
 }
