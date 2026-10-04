@@ -34,6 +34,8 @@ button.ghost { background: transparent !important; color: var(--ink) !important;
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .chips button, .options select { border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: 999px; padding: 6px 14px; font-size: 14px; }
 .chips button.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.chips button:disabled { opacity: .35; cursor: not-allowed; }
+.time-left { align-self: center; font-size: 14px; color: var(--muted); margin-left: 4px; white-space: nowrap; }
 .library { margin-top: 48px; }
 .library h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; }
 .lesson-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px; cursor: pointer; }

@@ -120,6 +120,38 @@ function logRefusal(user, kind, text, message) {
   fs.appendFile(path.join(DATA, 'log.jsonl'), line + '\n', () => {});
 }
 
+// ---------- daily lesson time ----------
+// An admin can give a learner a daily limit (user.dailyMinutes). Each new lesson's length counts when
+// it's created; replays and questions are free. Kept in data/usage.jsonl rather than counted from the
+// lessons on disk, so deleting a lesson doesn't give the time back. Days follow the server's clock.
+const USAGE = path.join(DATA, 'usage.jsonl');
+const today = () => new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD, local time
+function usedToday(userId) {
+  let lines = [];
+  try { lines = fs.readFileSync(USAGE, 'utf8').trim().split('\n'); } catch {}
+  const day = today();
+  return lines.reduce((sum, l) => {
+    try { const u = JSON.parse(l); return u.user === userId && u.day === day ? sum + u.minutes : sum; } catch { return sum; }
+  }, 0);
+}
+// { limit, used, left } for the user, or null if they have no limit.
+function usage(user) {
+  if (!user?.dailyMinutes) return null;
+  const used = usedToday(user.id);
+  return { limit: user.dailyMinutes, used, left: Math.max(0, user.dailyMinutes - used) };
+}
+function checkTimeLeft(user, minutes) {
+  const u = usage(user);
+  if (!u || minutes <= u.left) return;
+  const message = u.left < 1
+    ? "That's all the lesson time for today. Come back tomorrow for more!"
+    : `There ${u.left === 1 ? 'is 1 minute' : `are ${u.left} minutes`} of lesson time left today. Pick a shorter lesson!`;
+  throw Object.assign(new Error(message), { status: 429, extra: { limited: true, usage: u } });
+}
+function recordUsage(user, minutes, lessonId) {
+  fs.appendFileSync(USAGE, JSON.stringify({ at: new Date().toISOString(), day: today(), user: user.id, minutes, lesson: lessonId }) + '\n');
+}
+
 // ---------- learning profiles ----------
 // data/profiles/<user>.md: a plain-English guide to how this learner learns best, maintained by Claude
 // after each lesson and editable by the admin. The "## From the grown-up" section is the admin's and
@@ -425,6 +457,7 @@ Return: {"questions":[{"q":"...","choices":["..."],"answer":0,"explain":"..."}]}
 const api = {
   async 'POST outline'({ topic, minutes = 5, level, tone, teacher, model }, _, ctx) {
     minutes = Math.min(MAX_MINUTES, Math.max(1, Math.round(+minutes) || 5));
+    checkTimeLeft(ctx.user, minutes);
     // Screen first: nothing reaches the lesson writer until the topic passes the content policy.
     await screen(topic, 'lesson topic', ctx.user);
     const n = Math.max(1, Math.min(40, Math.round(minutes / 1.75)));
@@ -443,6 +476,7 @@ I'll then ask you for each part in turn.`,
     };
     await fsp.mkdir(path.join(lessonDir(id), 'audio'), { recursive: true });
     await fsp.writeFile(lessonFile(id), JSON.stringify(lesson, null, 2));
+    if (ctx.user.dailyMinutes) recordUsage(ctx.user, minutes, id);
     api['POST section']({ id, index: 0 }).catch(() => {}); // start writing part 1 right away
     return lesson;
   },
@@ -555,7 +589,7 @@ Return: {"steps":[...]}`,
   // Public (no session needed): me, profiles, setup, login, logout.
 
   async 'GET me'(_, q, ctx) {
-    return { setup: accounts.needsSetup(), user: accounts.public(ctx.user, true), admin: ctx.admin };
+    return { setup: accounts.needsSetup(), user: accounts.public(ctx.user, true), admin: ctx.admin, usage: usage(ctx.user) };
   },
 
   // Profiles for the "who's learning?" picker.
@@ -599,7 +633,7 @@ Return: {"steps":[...]}`,
   // ----- admin -----
 
   async 'GET admin/users'() {
-    return accounts.users.map(u => accounts.public(u, true));
+    return accounts.users.map(u => ({ ...accounts.public(u, true), usage: usage(u) }));
   },
 
   async 'POST admin/users'(body) {
@@ -820,7 +854,7 @@ http.createServer(async (req, res) => {
       json(res, 200, out, ctx.cookies);
     } catch (e) {
       if (e instanceof Refused) return json(res, 422, { error: e.message, refused: true, suggestions: e.suggestions }, ctx.cookies);
-      if (e.status) return json(res, e.status, { error: e.message }, ctx.cookies);
+      if (e.status) return json(res, e.status, { error: e.message, ...(e.extra || {}) }, ctx.cookies);
       console.error(e);
       json(res, 500, { error: e.message }, ctx.cookies);
     }

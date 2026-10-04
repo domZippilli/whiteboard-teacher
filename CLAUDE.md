@@ -112,6 +112,13 @@ See `PLAN.md` for status, decisions and roadmap.
 - Secrets: `ELEVENLABS_API_KEY`, or `ELEVENLABS_API_KEY_OP_REF` (a 1Password reference read with
   `op read` at startup; needs `OP_SERVICE_ACCOUNT_TOKEN`). Both go in `.env` (gitignored).
 
+## Daily lesson time
+- Optional per-learner limit `user.dailyMinutes` (Admin › People › Edit). A new lesson's length counts when
+  its outline is made (`recordUsage` → `data/usage.jsonl`, by server-local day); replays and questions
+  are free; deleting a lesson doesn't refund. Over the limit → 429 `{ limited, usage }` before screening.
+- `GET me` and `GET admin/users` include `usage: { limit, used, left }`; the home screen shows the minutes
+  left and greys out lengths that don't fit (`markLengths`); the out-of-time card is spoken.
+
 ## Content policies
 - `data/policies/master.txt` (everyone) + one per age band (`under8`, `8-12`, `13-17`, `adult`), seeded
   from `policy-defaults/` on first run, edited in Admin › Content rules. `#` lines are comments.

@@ -9,6 +9,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 
 export const AGE_BANDS = ['under8', '8-12', '13-17', 'adult'];
+// Daily lesson-time limit in minutes (set by the admin); empty/0 means no limit.
+const dailyMinutes = v => (+v > 0 ? Math.min(24 * 60, Math.round(+v)) : null);
 const ADMIN_IDLE_MS = 30 * 60 * 1000;
 const USER_COOKIE_DAYS = 400;
 
@@ -82,7 +84,7 @@ export function createAccounts(dataDir) {
     public(u, full = false) {
       if (!u) return null;
       const out = { id: u.id, name: u.name, avatar: u.avatar, role: u.role, locked: !!u.secret };
-      if (full) Object.assign(out, { ageBand: u.ageBand, notes: u.notes || '', settings: u.settings || {}, createdAt: u.createdAt });
+      if (full) Object.assign(out, { ageBand: u.ageBand, notes: u.notes || '', settings: u.settings || {}, dailyMinutes: u.dailyMinutes || null, createdAt: u.createdAt });
       return out;
     },
 
@@ -126,7 +128,8 @@ export function createAccounts(dataDir) {
     },
 
     // ----- user management (admin) -----
-    create({ name, avatar, role = 'learner', ageBand, notes, secret }) {
+    create(fields) {
+      const { name, avatar, role = 'learner', ageBand, notes, secret } = fields;
       if (!String(name || '').trim()) throw Object.assign(new Error('Name is required'), { status: 400 });
       const u = {
         id: crypto.randomBytes(6).toString('hex'),
@@ -135,6 +138,7 @@ export function createAccounts(dataDir) {
         role: role === 'admin' ? 'admin' : 'learner',
         ageBand: AGE_BANDS.includes(ageBand) ? ageBand : (role === 'admin' ? 'adult' : '8-12'),
         notes: String(notes || '').slice(0, 2000),
+        dailyMinutes: dailyMinutes(fields.dailyMinutes),
         settings: {},
         createdAt: new Date().toISOString(),
       };
@@ -151,6 +155,7 @@ export function createAccounts(dataDir) {
       if (fields.avatar !== undefined) u.avatar = fields.avatar || u.avatar;
       if (fields.ageBand !== undefined && AGE_BANDS.includes(fields.ageBand)) u.ageBand = fields.ageBand;
       if (fields.notes !== undefined) u.notes = String(fields.notes || '').slice(0, 2000);
+      if (fields.dailyMinutes !== undefined) u.dailyMinutes = dailyMinutes(fields.dailyMinutes);
       if (fields.settings && typeof fields.settings === 'object') u.settings = { ...(u.settings || {}), ...fields.settings };
       if (fields.role !== undefined && fields.role !== u.role) {
         if (u.role === 'admin' && users.filter(isAdmin).length === 1) throw Object.assign(new Error("Can't remove the last admin"), { status: 400 });

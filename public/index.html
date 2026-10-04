@@ -82,6 +82,7 @@
           <button type="button" data-min="3">3 min</button>
           <button type="button" data-min="5">5 min</button>
           <button type="button" data-min="10">10 min</button>
+          <span id="timeLeft" class="time-left hidden"></span>
         </div>
         <select id="level" aria-label="Audience">
           <option value="">Any level</option>
@@ -235,6 +236,10 @@
       <label id="uSecretLabel">PIN (4–8 digits) <input id="uSecret" type="password" autocomplete="new-password"></label>
       <label id="uNoPinRow" class="check"><input id="uNoPin" type="checkbox"> No PIN (tap to sign in)</label>
       <label>Teacher's name for them <input id="uTeacher" placeholder="Claude"></label>
+      <label id="uLimitRow">Daily lesson time (minutes)
+        <input id="uLimit" type="number" min="0" max="1440" step="1" inputmode="numeric" placeholder="No limit">
+        <small class="hint">New lessons count by their length; replays and questions are free. Empty: no limit.</small>
+      </label>
       <label>Notes for the teacher (interests, sensitivities)
         <textarea id="uNotes" rows="3" placeholder="Loves dinosaurs. Gets scared by spiders."></textarea>
       </label>

@@ -115,7 +115,7 @@ export function createAccountUI({ api, show, onSignedIn, onShowLessons, onPrevie
       const row = document.createElement('div');
       row.className = 'user-row';
       row.innerHTML = `<span class="avatar">${esc(u.avatar)}</span>
-        <span class="who"><b>${esc(u.name)}</b><small>${u.role === 'admin' ? 'Admin' : 'Learner'} · ${BANDS[u.ageBand] || ''}${u.locked ? ' · 🔒' : ''}</small></span>
+        <span class="who"><b>${esc(u.name)}</b><small>${u.role === 'admin' ? 'Admin' : 'Learner'} · ${BANDS[u.ageBand] || ''}${u.locked ? ' · 🔒' : ''}${u.usage ? ` · ⏱ ${u.usage.used} of ${u.usage.limit} min today` : ''}</small></span>
         <button type="button" class="ghost lessons">History</button>
         <button type="button" class="ghost edit">Edit</button>`;
       row.querySelector('.edit').onclick = () => editUser(u);
@@ -137,6 +137,7 @@ export function createAccountUI({ api, show, onSignedIn, onShowLessons, onPrevie
     $('#uBand').value = u.ageBand;
     $('#uTeacher').value = u.settings?.teacher || '';
     $('#uNotes').value = u.notes || '';
+    $('#uLimit').value = u.dailyMinutes || '';
     $('#uSecret').value = '';
     $('#uNoPin').checked = !isNew && !u.locked;
     $('#uErr').textContent = '';
@@ -146,6 +147,7 @@ export function createAccountUI({ api, show, onSignedIn, onShowLessons, onPrevie
       $('#uSecret').inputMode = admin ? 'text' : 'numeric';
       $('#uSecret').placeholder = isNew ? (admin ? 'Required' : 'Optional') : 'Leave blank to keep';
       $('#uNoPinRow').classList.toggle('hidden', admin);
+      $('#uLimitRow').classList.toggle('hidden', admin);
     };
     $('#uRole').onchange = syncSecretUi;
     syncSecretUi();
@@ -161,6 +163,7 @@ export function createAccountUI({ api, show, onSignedIn, onShowLessons, onPrevie
       const body = {
         name: $('#uName').value, avatar: getAvatar(), role: $('#uRole').value, ageBand: $('#uBand').value,
         notes: $('#uNotes').value, settings: { teacher: $('#uTeacher').value.trim() || undefined },
+        dailyMinutes: $('#uRole').value === 'admin' ? null : (+$('#uLimit').value || null),
       };
       const secret = $('#uSecret').value;
       if (secret) body.secret = secret;

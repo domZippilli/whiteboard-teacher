@@ -13,7 +13,7 @@ const api = async (path, body, method, retried) => {
   const data = await res.json();
   if (res.status === 401 && data.signin) { player?.stop(); account.showPicker(); }
   if (res.status === 403 && data.elevate && !retried && await account.askAdminPassword()) return api(path, body, method, true);
-  if (!res.ok) throw Object.assign(new Error(data.error || res.statusText), { refused: !!data.refused, suggestions: data.suggestions || [] });
+  if (!res.ok) throw Object.assign(new Error(data.error || res.statusText), { refused: !!data.refused, suggestions: data.suggestions || [], limited: !!data.limited, usage: data.usage });
   return data;
 };
 
@@ -741,9 +741,12 @@ function showStart({ resume, fresh } = {}) {
 }
 // A declined topic or question: the teacher's message, suggested alternatives as buttons, and
 // a way out. pick(question) runs a suggestion; back() is offered when there's somewhere to return to.
-function showRefusal(message, suggestions = [], { pick, back, backLabel } = {}) {
+// icon and askElse: for other uses of the card (e.g. out of lesson time: a clock, no "ask something else").
+function showRefusal(message, suggestions = [], { pick, back, backLabel, icon = '🙅', askElse = true } = {}) {
   const box = $('#refusal');
   box.classList.remove('hidden');
+  box.querySelector('.refusal-icon').textContent = icon;
+  $('#refusalNew').classList.toggle('hidden', !askElse);
   $('#refusalMsg').textContent = message;
   const list = $('#refusalPicks');
   list.replaceChildren();
@@ -1000,7 +1003,27 @@ function show(screen) {
   hidePrep();
 }
 
+// The length chips, and the learner's lesson time left today (if the admin set a daily limit):
+// lengths that don't fit are greyed out, and the choice drops to the longest one that does.
+function markLengths() {
+  const u = me?.usage;
+  const chips = [...$('#lengths').querySelectorAll('button')];
+  chips.forEach(b => (b.disabled = !!u && +b.dataset.min > u.left));
+  let chosen = +settings.minutes;
+  if (u && chosen > u.left) chosen = Math.max(0, ...chips.filter(b => !b.disabled).map(b => +b.dataset.min)); // 0: none fit
+  chips.forEach(b => b.classList.toggle('on', +b.dataset.min === chosen));
+  $('#lengths').dataset.chosen = chosen;
+  const el = $('#timeLeft');
+  el.classList.toggle('hidden', !u);
+  if (u) el.textContent = u.left >= 1 ? `⏱ ${u.left} min left today` : '⏱ No lesson time left today';
+}
+// Usage changes as lessons are made (and at midnight): refresh it whenever home is shown.
+async function refreshUsage() {
+  try { const m = await api('me'); if (me && m.user) { me.usage = m.usage; markLengths(); } } catch {}
+}
+
 async function goHome() {
+  refreshUsage();
   player.stop();
   history.pushState({}, '', '/');
   show('home');
@@ -1051,7 +1074,7 @@ async function renderLibrary({ el = $('#library'), user, heading = 'Your lessons
   }
 }
 
-async function startLesson(topic, minutes = settings.minutes) {
+async function startLesson(topic, minutes = +$('#lengths').dataset.chosen || settings.minutes) {
   if (!topic.trim()) return;
   show('lesson');
   player.stop();
@@ -1064,6 +1087,14 @@ async function startLesson(topic, minutes = settings.minutes) {
   try {
     lesson = await api('outline', { topic, minutes: +minutes, level: settings.level, tone: settings.tone, teacher: settings.teacher, model: settings.model });
   } catch (e) {
+    if (e.limited) {
+      // Out of lesson time for today: the teacher says so; replays still work.
+      if (me) me.usage = e.usage;
+      markLengths();
+      hidePrep();
+      sayText(e.message);
+      return showRefusal(e.message, [], { back: () => { lineAudio.pause(); goHome(); }, backLabel: 'OK', icon: '⏰', askElse: false });
+    }
     if (!e.refused) return showPrep(`Something went wrong: ${e.message}`, true);
     hidePrep();
     sayText(e.message);
@@ -1072,6 +1103,7 @@ async function startLesson(topic, minutes = settings.minutes) {
     });
   }
   history.replaceState({}, '', `/?lesson=${lesson.id}`);
+  if (me?.usage) { me.usage.used += lesson.minutes; me.usage.left = Math.max(0, me.usage.left - lesson.minutes); markLengths(); }
   for (const s of lesson.outline.sections) {
     const li = document.createElement('li');
     li.textContent = s.title;
@@ -1106,15 +1138,14 @@ function wire() {
   $('#askForm').onsubmit = e => {
     e.preventDefault();
     const q = $('#q').value;
-    history.pushState({}, '', `/?q=${encodeURIComponent(q)}&min=${settings.minutes}`);
+    history.pushState({}, '', `/?q=${encodeURIComponent(q)}&min=${$('#lengths').dataset.chosen || settings.minutes}`);
     startLesson(q);
   };
-  const markLength = () => $('#lengths').querySelectorAll('button').forEach(b => b.classList.toggle('on', +b.dataset.min === +settings.minutes));
   $('#lengths').onclick = e => {
-    if (!e.target.dataset.min) return;
-    settings.minutes = +e.target.dataset.min; saveSettings(); markLength();
+    if (!e.target.dataset.min || e.target.disabled) return;
+    settings.minutes = +e.target.dataset.min; saveSettings(); markLengths();
   };
-  markLength();
+  markLengths();
   $('#level').value = settings.level;
   $('#level').onchange = () => { settings.level = $('#level').value; saveSettings(); };
   $('#tone').value = settings.tone;
@@ -1437,7 +1468,7 @@ async function signedIn() {
   $('#meAdmin').classList.toggle('hidden', me.user.role !== 'admin');
   $('#level').value = settings.level;
   $('#tone').value = settings.tone;
-  $('#lengths').querySelectorAll('button').forEach(b => b.classList.toggle('on', +b.dataset.min === +settings.minutes));
+  markLengths();
   $('#ccBtn').classList.toggle('on', !!settings.captions);
   try { config = await api('config'); } catch {}
   applyListening();
