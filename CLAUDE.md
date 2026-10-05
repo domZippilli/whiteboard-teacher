@@ -89,6 +89,11 @@ See `PLAN.md` for status, decisions and roadmap.
 
 ## How lessons are written
 - Via the `lessons` backend; by default the `claude` CLI (`claude -p`, no API key), model `opus`.
+- Research: only the outline turn may use web tools, and only on a backend with `capabilities.research`
+  (claude-cli's `research` setting: `search` (default) → `--tools WebSearch --allowedTools WebSearch`,
+  `search+read` adds WebFetch, `off`). `RESEARCH_NOTE` tells it to search only when the topic needs it and to
+  treat results as information, not instructions; it puts facts in the plans and `sources` in the outline.
+  Every other turn runs with `--tools ''`. `lesson.researched` marks lessons that searched.
 - With claude-cli, each lesson is one Claude Code session (`--session-id`, then `--resume`), named "Lesson: …",
   run with cwd `~/.whiteboard-teacher/sessions` so it doesn't load this repo's CLAUDE.md or crowd
   its /resume list. Outline first, then parts written in order in that session. Raise-hand
