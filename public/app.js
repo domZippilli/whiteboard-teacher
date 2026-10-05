@@ -505,7 +505,7 @@ class Player {
         hidePrep();
       }
       // A little jingle as the lesson begins.
-      if (section === 0 && this.pos.step === 0) sound.sting('intro', config.music?.intro);
+      if (section === 0 && this.pos.step === 0 && playful(l)) sound.sting('intro', config.music?.intro);
       if (this.titleShown) {
         this.titleShown = false;
         await this.board.run({ op: 'erase', target: ['_title', '_titleBy'] });
@@ -952,23 +952,43 @@ function loadQuiz(lesson) {
   if (lesson.quiz || lesson.quizPending) return lesson.quizPending;
   lesson.quizPending = api('quiz', { id: lesson.id }).then(q => {
     lesson.quiz = q?.questions?.length ? q : false;
-    if (lesson.quiz) quizSpeech(lesson.quiz.questions[0], lesson.id);
+    if (lesson.quiz) quizSpeech(lesson.quiz.questions[0], lesson.id, 0, lesson);
     return lesson.quiz;
   }).catch(e => { console.warn('quiz', e); lesson.quiz = false; return false; })
     .finally(() => { lesson.quizPending = null; });
   return lesson.quizPending;
 }
 
-// Spoken text for a question: the question then its options; and what's said after each answer.
-const quizLines = q => ({
-  ask: `${q.q} ${q.choices.map((c, i) => `${i + 1}: ${c}.`).join(' ')}`,
-  right: `[excited] That's right! ${q.explain || ''}`,
-  wrong: `[warmly] Not quite. It's ${q.choices[q.answer]}. ${q.explain || ''}`,
-});
-function quizSpeech(q, id) {
+// Whether a lesson suits playful touches (jingles, chimes, fanfares, bouncy quiz music): the teacher
+// decides when planning; older lessons go by their style.
+const playful = l => l?.outline?.playful ?? !['serious', 'matter'].includes(l?.tone);
+
+// How the teacher reacts in the quiz: written with the quiz in the lesson's voice; these are for older quizzes.
+const REACTIONS = {
+  playful: { right: ["[excited] That's right!"], wrong: ['[warmly] Not quite.'],
+    score: { perfect: '[excited] You got all {total}! Perfect score!', good: '[warmly] You got {score} out of {total}. Nicely done!',
+      low: "[warmly] You got {score} out of {total}. That's okay, it's a lot to take in. Want to replay the lesson sometime?" } },
+  plain: { right: ["That's right."], wrong: ['Not quite.'],
+    score: { perfect: 'You got all {total} right.', good: 'You got {score} out of {total}.', low: 'You got {score} out of {total}. It may be worth going over the lesson again.' } },
+};
+const reactionsFor = l => {
+  const d = REACTIONS[playful(l) ? 'playful' : 'plain'];
+  return { right: l?.quiz?.reactions?.right || d.right, wrong: l?.quiz?.reactions?.wrong || d.wrong, score: { ...d.score, ...l?.quiz?.score } };
+};
+// Spoken text for question i: the question then its options; and what's said after each answer.
+// The reaction for a question is fixed (by its number) so its audio can be made ahead of time.
+const quizLines = (q, i = 0, l = player.lesson) => {
+  const r = reactionsFor(l);
+  return {
+    ask: `${q.q} ${q.choices.map((c, k) => `${k + 1}: ${c}.`).join(' ')}`,
+    right: `${r.right[i % r.right.length]} ${q.explain || ''}`,
+    wrong: `${r.wrong[i % r.wrong.length]} It's ${q.choices[q.answer]}. ${q.explain || ''}`,
+  };
+};
+function quizSpeech(q, id, i, l) {
   if (!q) return;
-  const l = quizLines(q);
-  speech(l.ask, id); speech(l.right, id); speech(l.wrong, id);
+  const lines = quizLines(q, i, l);
+  speech(lines.ask, id); speech(lines.right, id); speech(lines.wrong, id);
 }
 
 const quiz = { i: 0, score: 0, answers: [], answered: false, active: false };
@@ -978,7 +998,7 @@ async function startQuiz() {
   const box = $('#quiz');
   box.classList.remove('hidden');
   Object.assign(quiz, { i: 0, score: 0, answers: [], answered: false, active: true });
-  sound.startMusic('quiz', config.music?.quiz);
+  if (playful(l)) sound.startMusic('quiz', config.music?.quiz);
   if (!l.quiz) {
     $('#quizQ').textContent = 'Writing your quiz…';
     $('#quizChoices').replaceChildren();
@@ -1011,8 +1031,8 @@ function showQuestion() {
     b.onclick = () => answer(i);
     list.appendChild(b);
   });
-  sayText(quizLines(q).ask);
-  quizSpeech(qs[quiz.i + 1], l.id);
+  sayText(quizLines(q, quiz.i).ask);
+  quizSpeech(qs[quiz.i + 1], l.id, quiz.i + 1, l);
 }
 
 function answer(i) {
@@ -1023,7 +1043,7 @@ function answer(i) {
   const right = i === q.answer;
   if (right) quiz.score++;
   quiz.answers.push(i);
-  sound.ui(right ? 'right' : 'wrong');
+  if (playful(player.lesson)) sound.ui(right ? 'right' : 'wrong');
   [...$('#quizChoices').children].forEach((b, k) => {
     b.disabled = true;
     b.classList.toggle('right', k === q.answer);
@@ -1034,7 +1054,7 @@ function answer(i) {
   $('#quizNext').textContent = last ? 'See my score' : 'Next question';
   $('#quizNext').classList.remove('hidden');
   $('#quizNext').focus();
-  sayText(quizLines(q)[right ? 'right' : 'wrong']);
+  sayText(quizLines(q, quiz.i)[right ? 'right' : 'wrong']);
 }
 
 function nextQuestion() {
@@ -1056,10 +1076,9 @@ function endQuiz(skipped) {
   $('#quizQ').textContent = `You got ${quiz.score} out of ${total}!`;
   $('#quizChoices').replaceChildren();
   const pct = quiz.score / total;
-  sound.sting(pct === 1 ? 'perfect' : 'celebrate', config.music?.[pct === 1 ? 'perfect' : 'celebrate']);
-  const line = pct === 1 ? `[excited] You got all ${total}! Perfect score!`
-    : pct >= 0.6 ? `[warmly] You got ${quiz.score} out of ${total}. Nicely done!`
-    : `[warmly] You got ${quiz.score} out of ${total}. That's okay, it's a lot to take in. Want to replay the lesson sometime?`;
+  if (playful(l)) sound.sting(pct === 1 ? 'perfect' : 'celebrate', config.music?.[pct === 1 ? 'perfect' : 'celebrate']);
+  const score = reactionsFor(l).score;
+  const line = (pct === 1 ? score.perfect : pct >= 0.6 ? score.good : score.low).replaceAll('{score}', quiz.score).replaceAll('{total}', total);
   $('#quizExplain').textContent = stripCues(line);
   sayText(line);
   $('#quizNext').textContent = 'Done';

@@ -172,6 +172,10 @@ See `PLAN.md` for status, decisions and roadmap.
 ## End of lesson
 - "Any questions?" (spoken) with a 30s countdown to the quiz; the countdown stops if the student
   starts asking. Questions asked here play as asides, then it asks "any other questions?".
+- Tone of the reactions: the quiz is written with `reactions: { right[], wrong[] }` and `score: { perfect, good,
+  low }` ({score}/{total} placeholders) in the lesson's voice, weighing style, age and the subject's gravity.
+  The outline's `playful` flag gates the intro jingle, quiz music, chimes and fanfares. Older lessons:
+  `REACTIONS` in app.js, plain for the serious / matter-of-fact styles.
 - Quiz: `POST /api/quiz` (forked session, prefetched while the last part plays) → `lesson.quiz`;
   results → `lesson.quizResults` (last score shown in the library). Skippable.
 - Then the feedback card (stored in `lesson.feedback`, to be used by the V2 style profile).

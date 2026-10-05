@@ -463,11 +463,23 @@ Everything is spoken aloud by the teacher's voice as well as shown, so:
 - "answer": index of the correct choice (0-based).
 - "explain": one or two spoken sentences on why the right answer is right, in your teaching voice (it's said after
   the student answers, whether they got it right or wrong, so don't start with "Correct" or "Wrong").
-Return: {"questions":[{"q":"...","choices":["..."],"answer":0,"explain":"..."}]}`,
+Also write how you react, spoken in your voice, matching this lesson's style, the student's age and the gravity of the
+subject: cheering and [excited] cues suit young kids and light topics; for a serious or mature subject, or an adult
+in a serious or matter-of-fact style, be measured and plain ("That's right." / "Not quite."), never gushing.
+- "reactions": {"right": [3 short varied lines said when they answer correctly], "wrong": [3 short varied lines said
+  before the correct answer is given, e.g. "Not quite."]}
+- "score": {"perfect": "...", "good": "...", "low": "..."}: what you say at the end for all right, most right (60%+),
+  and fewer; use {score} and {total} for the numbers (e.g. "You got {score} out of {total}."). Keep "low" kind.
+Return: {"questions":[{"q":"...","choices":["..."],"answer":0,"explain":"..."}],"reactions":{"right":["..."],"wrong":["..."]},"score":{"perfect":"...","good":"...","low":"..."}}`,
   });
   const questions = (quiz.questions || []).filter(q => q.q && Array.isArray(q.choices) && q.choices[q.answer] !== undefined);
-  await updateLesson(id, l => { l.quiz = { questions }; });
-  return { questions };
+  const lines = a => (Array.isArray(a) ? a.filter(x => typeof x === 'string' && x.trim()).slice(0, 5) : []);
+  const reactions = { right: lines(quiz.reactions?.right), wrong: lines(quiz.reactions?.wrong) };
+  const score = Object.fromEntries(['perfect', 'good', 'low'].filter(k => typeof quiz.score?.[k] === 'string' && quiz.score[k].trim()).map(k => [k, quiz.score[k]]));
+  if (Object.keys(score).length < 3) console.warn(`quiz score lines incomplete: ${JSON.stringify(quiz.score)?.slice(0, 300)}`);
+  const out = { questions, ...(reactions.right.length && reactions.wrong.length ? { reactions } : {}), ...(Object.keys(score).length ? { score } : {}) };
+  await updateLesson(id, l => { l.quiz = out; });
+  return out;
 }
 
 // Planning may use web search (when the lessons backend allows it, e.g. claude-cli's "research" setting).
@@ -501,7 +513,9 @@ const api = {
       mode: 'start', name: `Lesson: ${topic}`.slice(0, 80),
       prompt: `A student asked: "${topic}"
 Plan a ${minutes}-minute lesson${level ? ` for a ${level} audience` : ''}, split into ${n} part(s) that will each be written separately but played back to back as one continuous lesson, followed by a separate question time and quiz (about ${Math.round(minutes / n * 10) / 10} minutes of speech each). Shape the lesson however you think teaches it best.
-Return: {"title":"<short lesson title>","sections":[{"title":"...","plan":"<what this part covers and how you intend to show it on the board>"}]}
+Also judge whether this lesson suits light, playful touches (a jingle as it starts, chimes and a fanfare in the quiz):
+yes for young students and light topics; no when the subject is serious, sad or mature, or the style is serious or matter of fact.
+Return: {"title":"<short lesson title>","playful":true|false,"sections":[{"title":"...","plan":"<what this part covers and how you intend to show it on the board>"}]}
 I'll then ask you for each part in turn.`,
     });
     const id = `${new Date().toISOString().slice(0, 10)}-${slug(outline.title || topic)}-${crypto.randomBytes(2).toString('hex')}`;
