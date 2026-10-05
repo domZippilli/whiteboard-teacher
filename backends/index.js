@@ -155,6 +155,7 @@ export function loadBackends({ dataDir, env, opRead, defaults }) {
     first: job => jobs[job].find(healthy) || null,
     healthy,
     markFailed,
+    clearFailed: b => health.delete(b.id),
     describe: () => JOBS.map(j => `${j}: ${jobs[j].map(b => b.describe()).join(' → ') || '(none)'}`).join('\n  '),
 
     adminView() {

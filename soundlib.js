@@ -104,8 +104,9 @@ export function createSoundLibrary({ dir, backends, urlFor }) {
             console.log(`sound made (${b.id}): ${kind} ${seconds}s "${text.slice(0, 60)}"`);
             return { url: urlFor(file) };
           } catch (e) {
-            // A bad description (422) isn't the backend's fault.
+            // A bad description (422) isn't the backend's fault; nor is ElevenLabs being busy.
             if (e.status === 422 || e.status === 400) { console.warn(`sound refused: "${text.slice(0, 60)}": ${e.message}`); return null; }
+            if (e.busy) { console.warn(`sound not made (busy): "${text.slice(0, 60)}"`); return null; }
             backends.markFailed(b, e);
           }
         }
@@ -139,11 +140,17 @@ export function createSoundLibrary({ dir, backends, urlFor }) {
       if (!def) throw Object.assign(new Error('Unknown music slot'), { status: 400 });
       prompt = norm(prompt) || def.prompt;
       seconds = Math.round(Math.min(120, Math.max(3, +seconds || def.seconds)));
-      const b = backends.jobs.sounds.find(x => backends.healthy(x) && x.capabilities.music);
+      // The admin asked for this directly: try even a backend that failed a moment ago, and don't take it
+      // out of rotation if it fails now (the message says why).
+      const b = backends.jobs.sounds.find(x => backends.healthy(x) && x.capabilities.music) || backends.jobs.sounds.find(x => x.capabilities.music);
       if (!b) throw Object.assign(new Error('No sounds backend that can make music (Admin › Backends)'), { status: 503 });
       let audio, ext;
       try { ({ audio, ext } = await b.music({ text: prompt, seconds })); }
-      catch (e) { if (![400, 422].includes(e.status)) backends.markFailed(b, e); throw Object.assign(e, { status: e.status || 502 }); }
+      catch (e) {
+        const msg = e.busy ? `ElevenLabs is busy right now (${e.message}). Try again in a minute.` : e.message;
+        throw Object.assign(new Error(msg), { status: e.status >= 400 && e.status < 500 ? e.status : 502 });
+      }
+      backends.healthy(b) || backends.clearFailed?.(b);
       const file = `music-${slot}-${Date.now().toString(36)}.${ext}`;
       await fsp.mkdir(dir, { recursive: true });
       await fsp.writeFile(path.join(dir, file), audio);

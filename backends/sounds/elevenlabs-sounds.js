@@ -9,26 +9,40 @@ export const meta = {
   fields: [
     { key: 'apiKey', label: 'API key', kind: 'secret' },
     { key: 'musicModel', label: 'Music model', kind: 'select', options: ['music_v1', 'music_v2', 'music_v2_5'], default: 'music_v1' },
+    { key: 'concurrency', label: 'Requests at once', kind: 'number', default: 1, hint: 'Shares your plan’s limit with the voice' },
     { key: 'timeout', label: 'Timeout (s)', kind: 'number', default: 120 },
   ],
 };
 
-export function create({ apiKey, musicModel = 'music_v1', timeout = 120 }) {
+export function create({ apiKey, musicModel = 'music_v1', timeout = 120, concurrency = 1 }) {
   if (!apiKey) throw new Error('needs an API key');
-  async function post(path, body) {
-    const res = await fetch(`https://api.elevenlabs.io${path}`, {
-      method: 'POST',
-      headers: { 'xi-api-key': apiKey, 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(timeout * 1000),
-    }).catch(e => { throw Object.assign(new Error(`Can't reach ElevenLabs: ${e.message}`), { status: 0 }); });
-    if (!res.ok) {
+  // The plan's concurrent-request limit is shared with the voice: queue beyond `concurrency`.
+  let active = 0;
+  const waiting = [];
+  const slot = async fn => {
+    if (active >= concurrency) await new Promise(r => waiting.push(r));
+    active++;
+    try { return await fn(); } finally { active--; waiting.shift()?.(); }
+  };
+  // Busy (429 "heavy traffic", too many requests) or a server hiccup: wait and try again, a few times.
+  const post = (path, body) => slot(async () => {
+    for (let attempt = 0; ; attempt++) {
+      const res = await fetch(`https://api.elevenlabs.io${path}`, {
+        method: 'POST',
+        headers: { 'xi-api-key': apiKey, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(timeout * 1000),
+      }).catch(e => { throw Object.assign(new Error(`Can't reach ElevenLabs: ${e.message}`), { status: 0 }); });
+      if (res.ok) return Buffer.from(await res.arrayBuffer());
       const data = await res.json().catch(() => ({}));
       const msg = data?.detail?.message || (typeof data?.detail === 'string' ? data.detail : '') || `ElevenLabs error ${res.status}`;
-      throw Object.assign(new Error(msg), { status: res.status });
+      if ((res.status === 429 || res.status >= 500) && attempt < 4) {
+        await new Promise(r => setTimeout(r, 2000 * 2 ** attempt)); // 2, 4, 8, 16 s
+        continue;
+      }
+      throw Object.assign(new Error(msg), { status: res.status, busy: res.status === 429 });
     }
-    return Buffer.from(await res.arrayBuffer());
-  }
+  });
 
   return {
     type,
