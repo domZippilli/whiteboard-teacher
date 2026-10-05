@@ -97,7 +97,8 @@ See `PLAN.md` for status, decisions and roadmap.
   learner's content policy + SCRIPT_API.md. Replies are JSON only, with one retry in the same session.
 - A lesson = outline → sections (parts) → steps. Each step is `{ "say": "...", "draw": [ops] }`.
   Ops (1600x900 board): `clear, text, line, rect, circle, ellipse, path, polyline, brace, label, icon,
-  dot, move, scale, rotate, highlight, color, fade, erase, stop, group, pause`. Ops in a step are
+  dot, move, scale, rotate, highlight, color, fade, erase, stop, group, pause` (+ `sound, music` when the
+  learner has sound). Ops in a step are
   spread across the speech, or pinned to words with `"at"`.
 - If you add an op, update both SCRIPT_API.md (or SCRIPT_SOUNDS.md) and `board.js`. Do not add layout or structure rules;
   style comes from the learner (style picker now, learning-style profile in V2).
