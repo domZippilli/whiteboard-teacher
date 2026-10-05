@@ -139,6 +139,20 @@ Needed before learning profiles: the app will move to the homelab and be used fr
 4. ✅ Learning profiles: auto-update after lessons, used in prompts, admin view/edit.
 5. ✅ Homelab: `tailscale serve` HTTPS, run as a systemd user service, PWA manifest + icon (see CLAUDE.md › Deploy).
 
+## Sound (2026-10-04)
+1. ✅ Synth sounds in the browser (`public/sound.js`, no cost): marker scratches that follow the drawing
+   (strokes, handwriting, eraser, highlight), quiz right/wrong, countdown ticks, raised hand. Levels set
+   against leveled speech: marker ~-19 dB, UI ~-12 dB.
+2. ✅ `sound` / `music` ops (docs/SCRIPT_SOUNDS.md, sent only when the learner has sound): free-text
+   descriptions, made by the `sounds` backend job (ElevenLabs sound effects / Eleven Music), cached in
+   one shared library (`lessons/_sounds/`, `soundlib.js`) and offered back to the writer to reuse.
+   Limits: 3 effects a part, 2 an aside, 1 music accent a lesson (extras dropped on save).
+3. ✅ Music for the gaps: waiting (lesson/answer being written), quiz, lesson start, quiz done, perfect
+   score. Admin › Sounds makes each from a prompt; until then a generative pentatonic tune / synth sting.
+   Music ducks under the teacher's voice.
+- Per learner: admin switch (People › Edit), learner volume (Settings).
+- Maybe later: a free sounds backend (e.g. a local text-to-audio model on the homelab).
+
 ## Next (polish)
 - **Faster start**: stream part 1 so playback begins within seconds instead of 30-60s.
 - **Layout safety net**: renderer-side bounds clamping / overlap nudging, without constraining the model.

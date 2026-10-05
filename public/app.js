@@ -1,6 +1,7 @@
 // Whiteboard Teacher — app shell and lesson player.
 import { Board } from './board.js';
 import { createAccountUI } from './account.js';
+import { createSound } from './sound.js';
 
 const $ = s => document.querySelector(s);
 // Signed out → back to the profile picker. Admin mode lapsed → ask for the password and retry once.
@@ -20,7 +21,7 @@ const api = async (path, body, method, retried) => {
 // ---------- settings ----------
 
 // Settings belong to the signed-in user and live on the server (so a shared tablet follows the profile).
-const DEFAULTS = { teacher: 'Claude', voice: '', rate: 1, model: 'opus', minutes: 5, level: '', tone: '', captions: false };
+const DEFAULTS = { teacher: 'Claude', voice: '', rate: 1, model: 'opus', minutes: 5, level: '', tone: '', captions: false, volume: 0.8 };
 const settings = { ...DEFAULTS };
 let me = null; // { user, admin }
 let settingsTimer;
@@ -42,6 +43,13 @@ function applyName() {
 // Each step is generated separately, so loudness varies between them. Run playback through a
 // compressor + makeup gain to even it out. Created on first use (needs a user gesture).
 let audioCtx;
+// Marker sounds, effects and music (sound.js); shares the speech's audio context.
+const sound = createSound(() => (audioCtx ||= new AudioContext()));
+// The learner's volume, and whether the admin allows them sound at all.
+function applySound() {
+  sound.configure({ volume: settings.volume ?? 0.8, allowed: me?.user?.sounds !== false });
+  if (sound.on) sound.preload(config.music?.waiting);
+}
 function levelAudio(audio) {
   if (audio._leveled) return;
   try {
@@ -178,6 +186,25 @@ const LINES = {
   ],
 };
 const lineAudio = new Audio();
+// Music gets quieter whenever the teacher talks.
+lineAudio.addEventListener('play', () => sound.duck(true));
+for (const ev of ['pause', 'ended']) lineAudio.addEventListener(ev, () => sound.duck(!!player?.speaking));
+
+// A lesson's sound effect or music accent → its URL (made by the server on first use, then cached).
+const soundUrls = new Map();
+function soundUrl(op, lessonId) {
+  const kind = op.op === 'music' ? 'music' : 'effect';
+  const text = String((kind === 'music' ? op.music ?? op.sound : op.sound ?? op.music) || '').trim();
+  if (!text || !sound.on) return Promise.resolve(null);
+  const key = `${lessonId}|${kind}|${text}|${op.seconds}`;
+  if (!soundUrls.has(key)) {
+    soundUrls.set(key, api('sound', { id: lessonId, kind, text, seconds: op.seconds })
+      .then(r => r.url).catch(e => { console.warn('sound', e.message); return null; }));
+  }
+  return soundUrls.get(key);
+}
+// Start making the sounds in some steps ahead of time.
+const prefetchSounds = (steps, lessonId) => steps.forEach(st => (st?.draw || []).forEach(o => (o?.op === 'sound' || o?.op === 'music') && soundUrl(o, lessonId)));
 // Pre-make the teacher's little lines. For an in-browser voice, just the first (which also loads the
 // model in the background); the rest are made when needed.
 async function warmLines() {
@@ -390,6 +417,7 @@ class Clock {
 class Player {
   constructor() {
     this.board = new Board($('#board'));
+    this.board.onSound = (kind, info) => (kind === 'sound' || kind === 'music' ? this.playSound(info) : sound.board(kind, info));
     this.clock = new Clock();
     this.audio = new Audio();
     this.gen = 0; // bumps on every seek/stop; stale loops exit
@@ -414,6 +442,8 @@ class Player {
   stop() {
     this.gen++;
     this.audio.pause();
+    sound.stop();
+    sound.stopMusic();
     speechSynthesis.cancel();
     this.clock.resume();
     this.board.resume();
@@ -427,6 +457,7 @@ class Player {
     l.pending[i] ||= api('section', { id: l.id, index: i }).then(s => {
       l.sections[i] = s;
       (s.steps || []).slice(0, 2).forEach(st => speech(st.say, l.id));
+      prefetchSounds((s.steps || []).slice(0, 3), l.id);
       renderTimeline();
       return s;
     }).finally(() => delete l.pending[i]);
@@ -473,6 +504,8 @@ class Player {
         if (!alive()) return;
         hidePrep();
       }
+      // A little jingle as the lesson begins.
+      if (section === 0 && this.pos.step === 0) sound.sting('intro', config.music?.intro);
       if (this.titleShown) {
         this.titleShown = false;
         await this.board.run({ op: 'erase', target: ['_title', '_titleBy'] });
@@ -488,6 +521,7 @@ class Player {
         // ElevenLabs takes ~4s per paragraph, so anything not prefetched is an audible gap.
         const ahead = [...steps.slice(this.pos.step + 1), ...(l.sections[section + 1]?.steps || [])].slice(0, 3);
         ahead.forEach(st => speech(st.say, l.id));
+        prefetchSounds(ahead, l.id);
         renderProgress();
         await this.playStep(steps[this.pos.step], alive);
         if (!alive()) return;
@@ -568,9 +602,10 @@ class Player {
   speak(text, tts, alive) {
     if (!text) return Promise.resolve();
     return new Promise(resolve => {
-      const done = () => { clearInterval(watch); this.speaking = false; resolve(); };
+      const done = () => { clearInterval(watch); this.speaking = false; sound.duck(false); resolve(); };
       const watch = setInterval(() => { if (!alive()) done(); }, 100);
       this.speaking = true;
+      sound.duck(true);
       if (tts?.url) {
         levelAudio(this.audio);
         audioCtx?.resume();
@@ -595,6 +630,15 @@ class Player {
     });
   }
 
+  // A `sound` or `music` op reached the board. If it's still being made, play it when it arrives,
+  // unless that's too late to fit the moment (or the lesson has moved on).
+  playSound(op) {
+    const gen = this.gen, asked = performance.now();
+    soundUrl(op, this.lesson.id).then(url => {
+      if (url && gen === this.gen && !this.paused && performance.now() - asked < 2500) sound.effect(url, { music: op.op === 'music' });
+    });
+  }
+
   // Handwritten title card shown while the first part is being written; erased when it starts.
   titleCard() {
     const l = this.lesson;
@@ -616,12 +660,12 @@ class Player {
     hideStart();
     if (!this.playing) return this.seek(this.pos.section, this.pos.step);
     if (this.paused) {
-      this.clock.resume(); this.board.resume();
+      this.clock.resume(); this.board.resume(); sound.resume();
       audioCtx?.resume();
       if (this.speaking && this.audio.src && !this.audio.ended) this.audio.play().catch(() => {});
       speechSynthesis.resume();
     } else {
-      this.clock.pause(); this.board.pause(); this.audio.pause(); speechSynthesis.pause();
+      this.clock.pause(); this.board.pause(); this.audio.pause(); speechSynthesis.pause(); sound.pause();
     }
     updatePlayButton();
   }
@@ -685,8 +729,10 @@ class Player {
     updatePlayButton();
     this.board.reset();
     const steps = aside.steps || [];
+    prefetchSounds(steps.slice(0, 2), this.lesson.id);
     for (let k = 0; k < steps.length; k++) {
       steps.slice(k + 1, k + 4).forEach(st => speech(st.say, this.lesson.id));
+      prefetchSounds(steps.slice(k + 1, k + 4), this.lesson.id);
       await this.playStep(steps[k], alive);
       if (!alive()) return;
     }
@@ -695,7 +741,7 @@ class Player {
 }
 
 const player = new Player();
-window.wt = { player, speech, browserTranscribe: (...a) => browserTranscribe(...a) }; // for debugging from the console
+window.wt = { player, speech, sound, browserTranscribe: (...a) => browserTranscribe(...a) }; // for debugging from the console
 
 // ---------- UI ----------
 
@@ -772,6 +818,8 @@ function showPrep(text, error, kind = 'lesson') {
   if (error) stopQuips();
   else if (wasHidden || kind !== showPrep.kind) startQuips(kind);
   showPrep.kind = kind;
+  // Music while we wait (stops for an error).
+  if (error) sound.stopMusic(); else sound.startMusic('waiting', config.music?.waiting);
 }
 // Start card: shown when opening a saved lesson (a click also unlocks audio) or when the
 // browser blocked autoplay mid-lesson.
@@ -809,7 +857,7 @@ function showRefusal(message, suggestions = [], { pick, back, backLabel, icon = 
 function hideRefusal() { $('#refusal').classList.add('hidden'); }
 
 function hideStart() { $('#start').classList.add('hidden'); }
-function hidePrep() { $('#prep').classList.add('hidden'); $('#prep').classList.remove('low'); stopQuips(); showPrep.kind = null; }
+function hidePrep() { $('#prep').classList.add('hidden'); $('#prep').classList.remove('low'); stopQuips(); showPrep.kind = null; sound.stopMusic(); }
 function updatePlayButton() { $('#playBtn').textContent = player.playing && !player.paused ? '⏸' : '▶'; }
 
 function renderTimeline() {
@@ -886,6 +934,7 @@ function startCountdown() {
   const tick = () => {
     bar.querySelector('span').textContent = `Quiz in ${left}…`;
     bar.querySelector('.fill').style.width = `${(left / COUNTDOWN) * 100}%`;
+    if (left > 0 && left <= 5) sound.ui('tick');
     if (left-- <= 0) { hideEndQuestions(); startQuiz(); }
   };
   tick();
@@ -929,6 +978,7 @@ async function startQuiz() {
   const box = $('#quiz');
   box.classList.remove('hidden');
   Object.assign(quiz, { i: 0, score: 0, answers: [], answered: false, active: true });
+  sound.startMusic('quiz', config.music?.quiz);
   if (!l.quiz) {
     $('#quizQ').textContent = 'Writing your quiz…';
     $('#quizChoices').replaceChildren();
@@ -973,6 +1023,7 @@ function answer(i) {
   const right = i === q.answer;
   if (right) quiz.score++;
   quiz.answers.push(i);
+  sound.ui(right ? 'right' : 'wrong');
   [...$('#quizChoices').children].forEach((b, k) => {
     b.disabled = true;
     b.classList.toggle('right', k === q.answer);
@@ -997,6 +1048,7 @@ function endQuiz(skipped) {
   const l = player.lesson;
   quiz.active = false;
   lineAudio.pause();
+  sound.stopMusic();
   if (skipped || !l.quiz) { $('#quiz').classList.add('hidden'); return showFeedback(); }
   const total = l.quiz.questions.length;
   if (!viewingOthers()) api('quizResult', { id: l.id, score: quiz.score, total, answers: quiz.answers }).catch(() => {});
@@ -1004,6 +1056,7 @@ function endQuiz(skipped) {
   $('#quizQ').textContent = `You got ${quiz.score} out of ${total}!`;
   $('#quizChoices').replaceChildren();
   const pct = quiz.score / total;
+  sound.sting(pct === 1 ? 'perfect' : 'celebrate', config.music?.[pct === 1 ? 'perfect' : 'celebrate']);
   const line = pct === 1 ? `[excited] You got all ${total}! Perfect score!`
     : pct >= 0.6 ? `[warmly] You got ${quiz.score} out of ${total}. Nicely done!`
     : `[warmly] You got ${quiz.score} out of ${total}. That's okay, it's a lot to take in. Want to replay the lesson sometime?`;
@@ -1220,6 +1273,7 @@ function wire() {
   const openHand = (listen = false) => {
     if (!player.lesson) return;
     if (player.playing && !player.paused) player.togglePause();
+    sound.ui('hand');
     $('#handBox').classList.remove('hidden');
     $('#handQ').value = '';
     $('#handQ').placeholder = askHint();
@@ -1416,6 +1470,9 @@ function wire() {
     $('#sName').value = settings.teacher;
     $('#sRate').value = settings.rate;
     $('#sRateVal').textContent = `${settings.rate}×`;
+    $('#sVolumeRow').classList.toggle('hidden', me?.user?.sounds === false);
+    $('#sVolume').value = settings.volume ?? 0.8;
+    $('#sVolumeVal').textContent = volumeLabel(settings.volume ?? 0.8);
     $('#sModel').value = settings.model;
     $('#searchUrl').textContent = `${location.origin}/?q=%s`;
     await fillVoices();
@@ -1437,6 +1494,14 @@ function wire() {
     }
   };
   $('#sRate').oninput = () => ($('#sRateVal').textContent = `${$('#sRate').value}×`);
+  const volumeLabel = v => (+v ? `${Math.round(v * 100)}%` : 'Off');
+  // Hear the new volume as it's changed.
+  $('#sVolume').oninput = () => {
+    $('#sVolumeVal').textContent = volumeLabel($('#sVolume').value);
+    settings.volume = +$('#sVolume').value;
+    applySound();
+    sound.ui('right');
+  };
   dlg.onclose = () => {
     settings.teacher = $('#sName').value.trim() || 'Claude';
     settings.rate = +$('#sRate').value;
@@ -1534,6 +1599,7 @@ async function signedIn() {
   markLengths();
   $('#ccBtn').classList.toggle('on', !!settings.captions);
   try { config = await api('config'); } catch {}
+  applySound();
   applyListening();
   setTimeout(preloadListening, 3000);
   warmLines();
@@ -1586,8 +1652,11 @@ function wireAccount() {
     try {
       await account.renderUsers();
       // Backend changes can change the voices and the mic: refresh those after saving.
-      await account.renderBackends({ onSaved: async () => { config = await api('config'); applyListening(); preloadListening(); ttsCache.clear(); account.renderVoices(); } });
+      // Music made in Admin › Sounds plays from then on.
+      const soundsChanged = async () => { config = await api('config'); applySound(); };
+      await account.renderBackends({ onSaved: async () => { config = await api('config'); applyListening(); preloadListening(); ttsCache.clear(); account.renderVoices(); account.renderSounds({ onChanged: soundsChanged }); } });
       await account.renderVoices();
+      await account.renderSounds({ onChanged: soundsChanged });
       await account.renderPolicies();
     } catch { goHome(); }
   };

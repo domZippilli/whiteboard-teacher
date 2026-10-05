@@ -11,6 +11,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createAccounts } from './accounts.js';
 import { loadBackends } from './backends/index.js';
+import { createSoundLibrary, limitSounds, stripSounds, musicUsed, lessonHasSound, LIMITS } from './soundlib.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, 'public');
@@ -54,6 +55,13 @@ const backends = loadBackends({
 const accounts = createAccounts(DATA);
 
 const SCRIPT_API = () => fs.readFileSync(path.join(ROOT, 'docs/SCRIPT_API.md'), 'utf8');
+const SCRIPT_SOUNDS = () => fs.readFileSync(path.join(ROOT, 'docs/SCRIPT_SOUNDS.md'), 'utf8');
+
+// Sound effects and music (lessons/_sounds/, shared by all lessons; see soundlib.js).
+const sounds = createSoundLibrary({ dir: path.join(LESSONS, '_sounds'), backends, urlFor: file => `/lessons/_sounds/${file}` });
+// Whether a learner's new lessons get sound ops: there's a sounds backend and the admin hasn't
+// turned sound off for them. Fixed per lesson when it's created (lesson.sounds).
+const soundsFor = user => !!backends.jobs.sounds.length && user?.sounds !== false;
 
 // ---------- writing lessons ----------
 // Each lesson is one conversation with the `lessons` backend (for claude-cli, a Claude Code session
@@ -68,13 +76,13 @@ const TONES = {
   goofy: 'Goofy: playful and silly. Puns, absurd analogies, funny doodles on the board, comic timing (use the audio cues: [laughs], [gasps], [whispers], dramatic pauses), maybe a running gag. Still teach the material accurately and completely; the silliness is how you make it stick, not a replacement for substance.',
 };
 
-function system_(teacher, tone, policy, profile = '') {
+function system_(teacher, tone, policy, profile = '', withSounds = false) {
   return `You are ${teacher || 'Claude'}, a brilliant${TONES[tone] ? '' : ', warm'} teacher giving a live lesson at a whiteboard. You write lessons as scripts that a program performs: your words are spoken by a text-to-speech voice and your drawing is drawn live in sync. Be the teacher you'd most want to learn from: make it vivid, visual and genuinely interesting.
 ${TONES[tone] ? `\nYour teaching personality for this lesson, chosen by the student: ${TONES[tone]}\n` : ''}${policyPrompt(policy)}${profilePrompt(profile)}
 Here is the complete reference for the script format:
 
 ${SCRIPT_API()}
-
+${withSounds ? `\n${SCRIPT_SOUNDS()}\n` : ''}
 Every reply must be ONLY valid JSON, no prose before or after, no code fences.`;
 }
 
@@ -286,8 +294,8 @@ Reply with ONLY JSON: {"decision":"allow|adapt|refuse","note":"...","message":".
 // 'continue' or 'fork' (of `lesson`'s conversation). A conversation belongs to the backend that
 // started it; if another backend has to take over, it starts afresh with the lesson so far as context.
 // Returns { json, convo, backend } (convo/backend to store on the lesson when continuing).
-async function askJson({ teacher, tone, policy, profile, model, mode, lesson, name, prompt }) {
-  const system = system_(teacher, tone, policy, profile);
+async function askJson({ teacher, tone, policy, profile, model, mode, lesson, name, prompt, sounds: withSounds }) {
+  const system = system_(teacher, tone, policy, profile, withSounds ?? !!lesson?.sounds);
   const candidates = backends.jobs.lessons.filter(backends.healthy);
   if (!candidates.length) throw httpError(503, "The teacher isn't available right now. Please try again soon.");
   let lastError;
@@ -418,9 +426,14 @@ async function writeSection(id, index) {
     mode: 'continue', lesson,
     prompt: `Write part ${index + 1} of ${n}: "${s.title}". About ${words} spoken words.
 ${index === 0 ? 'This is the opening of the lesson; the board starts empty.' : `Part ${index} has just been performed and this part follows it straight away, with no break: the student never left, so just carry on (no greeting, "welcome back" or recap of what was just said). The board still shows whatever part ${index} left there.`}
-${index === n - 1 ? 'This is the final part of the lesson. After it, the app itself asks "any questions?" and then gives a short quiz, so don\'t quiz the student or ask for questions here.' : ''}
+${index === n - 1 ? 'This is the final part of the lesson. After it, the app itself asks "any questions?" and then gives a short quiz, so don\'t quiz the student or ask for questions here.' : ''}${soundNote(lesson)}
 Return: {"steps":[...]}`,
   }));
+  // Sounds: within the limits (or none), and made in the background so they're ready to play.
+  if (lesson.sounds) {
+    limitSounds(section.steps, { effects: LIMITS.effectsPerPart, musicLeft: Math.max(0, LIMITS.musicPerLesson - musicUsed(lesson)) });
+    sounds.warm(section.steps);
+  } else stripSounds(section.steps);
   // The conversation may have moved to another backend (fallback): remember where it lives now.
   await updateLesson(id, l => { l.sections[index] = section; l.convo = convo; l.convoBackend = backend; });
   return section;
@@ -454,6 +467,15 @@ Return: {"questions":[{"q":"...","choices":["..."],"answer":0,"explain":"..."}]}
   return { questions };
 }
 
+// For a lesson with sound: the effects already in the library, which the writer can reuse for free.
+function soundNote(lesson, { music = true } = {}) {
+  if (!lesson.sounds) return '';
+  const known = sounds.known();
+  const used = musicUsed(lesson);
+  return `\nSound: ${known.length ? `effects already in the library (reuse the exact wording and seconds to reuse one): ${known.join(', ')}.` : 'no effects in the library yet.'}${
+    !music || used >= LIMITS.musicPerLesson ? ' No more music accents in this lesson.' : ''}`;
+}
+
 const api = {
   async 'POST outline'({ topic, minutes = 5, level, tone, teacher, model }, _, ctx) {
     minutes = Math.min(MAX_MINUTES, Math.max(1, Math.round(+minutes) || 5));
@@ -461,8 +483,9 @@ const api = {
     // Screen first: nothing reaches the lesson writer until the topic passes the content policy.
     await screen(topic, 'lesson topic', ctx.user);
     const n = Math.max(1, Math.min(40, Math.round(minutes / 1.75)));
+    const withSounds = soundsFor(ctx.user);
     const { json: outline, convo, backend } = await askJson({
-      teacher, tone, policy: policyFor(ctx.user), profile: readProfile(ctx.user.id), model,
+      teacher, tone, policy: policyFor(ctx.user), profile: readProfile(ctx.user.id), model, sounds: withSounds,
       mode: 'start', name: `Lesson: ${topic}`.slice(0, 80),
       prompt: `A student asked: "${topic}"
 Plan a ${minutes}-minute lesson${level ? ` for a ${level} audience` : ''}, split into ${n} part(s) that will each be written separately but played back to back as one continuous lesson, followed by a separate question time and quiz (about ${Math.round(minutes / n * 10) / 10} minutes of speech each). Shape the lesson however you think teaches it best.
@@ -471,7 +494,7 @@ I'll then ask you for each part in turn.`,
     });
     const id = `${new Date().toISOString().slice(0, 10)}-${slug(outline.title || topic)}-${crypto.randomBytes(2).toString('hex')}`;
     const lesson = {
-      id, owner: ctx.user.id, convo, convoBackend: backend, topic, minutes, level, tone, teacher, model: model || null,
+      id, owner: ctx.user.id, convo, convoBackend: backend, topic, minutes, level, tone, teacher, model: model || null, sounds: withSounds,
       createdAt: new Date().toISOString(), outline, sections: [], asides: [], feedback: [],
     };
     await fsp.mkdir(path.join(lessonDir(id), 'audio'), { recursive: true });
@@ -507,14 +530,16 @@ I'll then ask you for each part in turn.`,
       prompt: atEnd
         ? `The lesson has been performed to the end, and you asked the student if they had any questions.
 They asked: "${question}"
-Answer it. The answer starts on a fresh, empty board (the final board is restored afterwards), so draw whatever helps. Take as long as the question deserves. Don't wrap up the whole lesson again or say goodbye; you'll ask if there are more questions afterwards.
+Answer it. The answer starts on a fresh, empty board (the final board is restored afterwards), so draw whatever helps. Take as long as the question deserves. Don't wrap up the whole lesson again or say goodbye; you'll ask if there are more questions afterwards.${soundNote(lesson, { music: false })}
 Return: {"steps":[...]}`
         : `The lesson is being performed; you are in part ${section + 1} ("${lesson.outline.sections[section]?.title}"), step ${step + 1}.
 What you said just before: "${(recent || '').slice(-1500)}"
 A student raised their hand and asked: "${question}"
-Answer it as an aside. The aside starts on a fresh, empty board (the current board is saved and restored after you finish), so draw whatever helps. Take as long as the question deserves, then hand back to the lesson.
+Answer it as an aside. The aside starts on a fresh, empty board (the current board is saved and restored after you finish), so draw whatever helps. Take as long as the question deserves, then hand back to the lesson.${soundNote(lesson, { music: false })}
 Return: {"steps":[...]}`,
     });
+    if (lesson.sounds) { limitSounds(aside.steps, { effects: LIMITS.effectsPerAside, musicLeft: 0 }); sounds.warm(aside.steps); }
+    else stripSounds(aside.steps);
     const entry = { section, step, question, steps: aside.steps, askedAt: new Date().toISOString() };
     await updateLesson(id, l => { l.asides.push(entry); });
     return entry;
@@ -624,7 +649,7 @@ Return: {"steps":[...]}`,
   // Per-user settings. Learners may change their voice, speed and lesson defaults; teacher name
   // and model are admin choices.
   async 'PUT settings'(body, _, ctx) {
-    const allowed = ['voice', 'rate', 'minutes', 'level', 'tone', 'captions', 'browserVoice'];
+    const allowed = ['voice', 'rate', 'minutes', 'level', 'tone', 'captions', 'browserVoice', 'volume'];
     if (ctx.user.role === 'admin') allowed.push('teacher', 'model');
     const picked = Object.fromEntries(Object.entries(body).filter(([k]) => allowed.includes(k)));
     return accounts.saveSettings(ctx.user, picked);
@@ -710,7 +735,35 @@ Return: {"steps":[...]}`,
       listening: !!backends.first('listening'), // false → no mic buttons
       // When the first working listening backend runs in the browser: which model to run there.
       listenInBrowser: backends.first('listening')?.capabilities?.runsIn === 'browser' ? backends.first('listening').clientSpec() : null,
+      music: sounds.musicUrls(), // { slot: url | null }; null → the player makes up a tune
     };
+  },
+
+  // A lesson's sound effect or music accent: { url } (made now if it isn't in the library yet), or
+  // { url: null } when it can't be had. Only sounds the lesson itself uses.
+  async 'POST sound'({ id, kind, text, seconds }, _, ctx) {
+    const lesson = await ownLesson(ctx, id);
+    kind = kind === 'music' ? 'music' : 'effect';
+    if (!lesson.sounds || accounts.byId(lesson.owner)?.sounds === false) return { url: null };
+    if (!lessonHasSound(lesson, kind, text)) throw httpError(403, 'Not a sound in this lesson');
+    return (await sounds.make(kind, text, seconds)) || { url: null };
+  },
+
+  // ----- admin: sounds -----
+  async 'GET admin/sounds'() {
+    return sounds.adminView();
+  },
+  async 'POST admin/music'({ slot, prompt, seconds }) {
+    await sounds.makeMusic(slot, prompt, seconds);
+    return sounds.adminView();
+  },
+  async 'DELETE admin/music'(_, q) {
+    await sounds.removeMusic(q.get('slot'));
+    return sounds.adminView();
+  },
+  async 'DELETE admin/sounds'(_, q) {
+    await sounds.removeEffect(q.get('key'));
+    return sounds.adminView();
   },
 
   // ----- admin: backends -----
@@ -867,7 +920,7 @@ http.createServer(async (req, res) => {
     const file = path.normalize(path.join(ROOT, decodeURIComponent(url.pathname)));
     if (!file.startsWith(LESSONS + path.sep)) { res.writeHead(403); return res.end(); }
     const lessonId = path.relative(LESSONS, file).split(path.sep)[0];
-    if (lessonId !== '_cache') {
+    if (lessonId !== '_cache' && lessonId !== '_sounds') {
       try { await ownLesson(ctx, lessonId); } catch (e) { res.writeHead(e.status || 404); return res.end(); }
     }
     return sendFile(res, file);

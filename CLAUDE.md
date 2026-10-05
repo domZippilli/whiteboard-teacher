@@ -11,7 +11,9 @@ See `PLAN.md` for status, decisions and roadmap.
 - `server.js` — zero-dependency Node (v20+) server: static files (sent `no-cache`), the `/api/*`
   endpoints, lesson storage, Claude and ElevenLabs calls.
 - `docs/SCRIPT_API.md` — the lesson script format. It is also the system prompt the model sees.
-- `public/board.js` — SVG whiteboard renderer: implements every op in SCRIPT_API.md.
+- `public/board.js` — SVG whiteboard renderer: implements every op in SCRIPT_API.md (and SCRIPT_SOUNDS.md).
+- `public/sound.js` — Web Audio: synthesized marker/UI sounds, lesson effects and music, gap music.
+- `soundlib.js` — server-side sound library (`lessons/_sounds/`): effects cache, music slots, limits.
 - `public/app.js` — app shell and player: home, library, playback clock, speech, questions,
   push-to-talk, end-of-lesson questions, quiz, feedback, settings.
 - `public/index.html`, `public/style.css` — vanilla, no build step.
@@ -45,13 +47,13 @@ See `PLAN.md` for status, decisions and roadmap.
 - Test against a throwaway server: `DATA_DIR=<tmp> PORT=4799 node server.js`.
 
 ## Backends
-- `backends/`: which service does each job (`lessons`, `utility`, `voice`, `listening`). See
+- `backends/`: which service does each job (`lessons`, `utility`, `voice`, `listening`, `sounds`). See
   `PLAN-CONFIGURABLE-BACKENDS.md`. `backends/index.js` builds them from `data/config.json`, or from
   `.env` when there is none (claude-cli + ElevenLabs, the original setup).
 - Interfaces: text `start/continue/fork/once` (returns `{ convo, text }`), voice `voices()/speak()`
   (returns `{ audio, mime, ext, timing? }`), listening `transcribe()`. Types: text `claude-cli`,
   `anthropic-messages`, `openai-chat`; voice `elevenlabs`, `openai-speech`, `browser-model`; listening
-  `elevenlabs-stt`, `openai-transcribe`, `browser-transcribe`.
+  `elevenlabs-stt`, `openai-transcribe`, `browser-transcribe`; sounds `elevenlabs-sounds` (see Sound).
   No backend for a job → 503 "the teacher isn't available".
 - `openai-chat` (llama.cpp, vLLM, Ollama, …): JSON mode via `response_format`, Qwen-style thinking toggle
   (`chat_template_kwargs.enable_thinking`), `<think>` stripped. No server-side conversations, so
@@ -97,7 +99,7 @@ See `PLAN.md` for status, decisions and roadmap.
   Ops (1600x900 board): `clear, text, line, rect, circle, ellipse, path, polyline, brace, label, icon,
   dot, move, scale, rotate, highlight, color, fade, erase, stop, group, pause`. Ops in a step are
   spread across the speech, or pinned to words with `"at"`.
-- If you add an op, update both SCRIPT_API.md and `board.js`. Do not add layout or structure rules;
+- If you add an op, update both SCRIPT_API.md (or SCRIPT_SOUNDS.md) and `board.js`. Do not add layout or structure rules;
   style comes from the learner (style picker now, learning-style profile in V2).
 
 ## Speech
@@ -114,6 +116,25 @@ See `PLAN.md` for status, decisions and roadmap.
   isn't focused (no on-screen keyboard over the board), hints say "hold 🎤" instead of A.
 - Secrets: `ELEVENLABS_API_KEY`, or `ELEVENLABS_API_KEY_OP_REF` (a 1Password reference read with
   `op read` at startup; needs `OP_SERVICE_ACCOUNT_TOKEN`). Both go in `.env` (gitignored).
+
+## Sound
+- Synth (`public/sound.js`, free): the board calls `board.onSound(kind, info)` for strokes, handwriting,
+  erasing and highlights (not when rebuilding instantly); the player turns them into soft marker sounds.
+  Quiz right/wrong, countdown ticks (last 5 s) and the raised hand are synth too.
+- `sound` / `music` ops: documented in `docs/SCRIPT_SOUNDS.md`, appended to the system prompt only when
+  `lesson.sounds` (set at creation: a `sounds` backend exists and the learner's `user.sounds !== false`).
+  Each part/aside prompt lists the library's known effects to reuse. Limits (`LIMITS` in soundlib.js) are
+  enforced on save; sounds are made in the background as soon as a part is written (`sounds.warm`).
+- `POST sound` { id, kind, text, seconds } → `{ url }` (or null): only sounds the lesson itself contains,
+  made once and cached by (kind, description, seconds). The board's `op_sound`/`op_music` emit to the
+  player, which plays them through `<audio>` (pausable); late ones (>2.5 s) are skipped.
+- Music for the gaps (`MUSIC_SLOTS`: waiting, quiz, intro, celebrate, perfect): Admin › Sounds makes them
+  (`POST admin/music`); `GET config` gives `music: { slot: url|null }`; null → generative synth tune.
+  Loops are crossfaded. Music ducks while the teacher speaks (`sound.duck`).
+- `sounds` job: type `elevenlabs-sounds` (effects: `/v1/sound-generation`; music: `/v1/music`,
+  instrumental). Older configs get it automatically when there's an ElevenLabs voice key (`addSoundsJob`).
+- Per learner: admin switch `user.sounds` (People › Edit, also stops sounds in existing lessons), volume
+  `settings.volume` (Settings; 0 = off).
 
 ## Daily lesson time
 - Optional per-learner limit `user.dailyMinutes` (Admin › People › Edit). A new lesson's length counts when

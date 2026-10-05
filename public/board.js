@@ -1,6 +1,8 @@
 // Whiteboard renderer: implements the ops in docs/SCRIPT_API.md on an SVG element.
 // Every op returns a promise that resolves when its drawing has finished. Animations use the
 // Web Animations API (and SMIL for particles) so they can all be paused together.
+// `board.onSound(kind, info)` (optional) hears what's being drawn, for the marker sounds, and plays
+// the `sound`/`music` ops; nothing is heard when the board is rebuilt instantly.
 
 const NS = 'http://www.w3.org/2000/svg';
 export const W = 1600, H = 900;
@@ -40,7 +42,10 @@ export class Board {
     this.anon = 0;
     this.paused = false;
     this.tweens = new Set();
+    this.onSound = null;
   }
+  // Seconds are real time (drawing speed applied).
+  emit(kind, info) { try { this.onSound?.(kind, info); } catch (e) { console.warn('sound', e); } }
 
   // rAF-driven tween for things WAAPI handles poorly (per-letter text). Respects pause and speed.
   tween(dur, frame) {
@@ -147,6 +152,7 @@ export class Board {
       shape.setAttribute('pathLength', '1');
       const dash = op.dash ? null : '1';
       shape.style.strokeDasharray = '1 1';
+      if (d > 0) this.emit('stroke', { dur: d / this.speed, len });
       await this.animate(shape, [{ strokeDashoffset: 1 }, { strokeDashoffset: 0 }], d, { easing: 'ease-out' });
       shape.removeAttribute('pathLength');
       shape.style.strokeDasharray = op.dash ? `${num(op.width, 4) * 3} ${num(op.width, 4) * 3}` : dash ? '' : '';
@@ -203,6 +209,7 @@ export class Board {
     const item = this.register(op.id, g, 'text', [num(op.x, 0), num(op.y, 0)], op.group);
     const total = dur ?? clamp(spans.length * 0.045, 0.2, 3);
     let shown = 0;
+    if (total > 0 && spans.length) this.emit('write', { dur: total / this.speed, chars: spans.length });
     await this.tween(total, k => {
       const n = Math.ceil(k * spans.length);
       for (; shown < n; shown++) spans[shown].style.opacity = 1;
@@ -253,6 +260,7 @@ export class Board {
 
   async op_clear(op, dur) {
     if (dur === 0 || !this.layer.childNodes.length) return this.reset();
+    this.emit('erase', { dur: 0.4 / this.speed });
     await this.animate(this.layer, [{ opacity: 1 }, { opacity: 0 }], 0.4);
     this.reset();
     this.layer.style.opacity = 1;
@@ -428,6 +436,7 @@ export class Board {
     const style = op.style || 'pulse';
     const color = op.color || 'red';
     if (style === 'pulse') {
+      if (dur !== 0) this.emit('highlight', {});
       await Promise.all(items.map(it => {
         const o = `${b.cx}px ${b.cy}px`;
         it.g.style.transformBox = 'view-box';
@@ -469,6 +478,7 @@ export class Board {
 
   async op_erase(op, dur) {
     const items = this.resolve(op.target);
+    if (items.length && dur !== 0) this.emit('erase', { dur: (dur ?? 0.4) / this.speed });
     await Promise.all(items.map(it => this.animate(it.g, [{ opacity: getComputedStyle(it.g).opacity }, { opacity: 0 }], dur ?? 0.4)));
     for (const it of items) { it.g.remove(); this.items.delete(it.id); }
   }
@@ -490,6 +500,11 @@ export class Board {
   }
 
   op_pause() {} // timing handled by the player
+
+  // Sound effects and music accents: played by whoever listens (the player), not drawn. They don't
+  // hold up the timeline.
+  op_sound(op, dur, instant) { if (!instant) this.emit('sound', op); }
+  op_music(op, dur, instant) { if (!instant) this.emit('music', op); }
 
   op_icon(op, dur) {
     const size = num(op.size, 100), x = num(op.x, 0), y = num(op.y, 0);

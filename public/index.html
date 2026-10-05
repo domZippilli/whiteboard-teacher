@@ -47,6 +47,7 @@
       <a href="#adminHistory" class="hidden" id="navHistory">History</a>
       <a href="#adminBackends">Backends</a>
       <a href="#adminVoices">Voices</a>
+      <a href="#adminSounds">Sounds</a>
       <a href="#adminPolicies">Content rules</a>
     </nav>
     <div class="admin-body">
@@ -54,6 +55,7 @@
       <section id="adminHistory" class="history"></section>
       <section id="adminBackends" class="backends"></section>
       <section id="adminVoices" class="voices"></section>
+      <section id="adminSounds" class="sounds"></section>
       <section id="adminPolicies" class="policies"></section>
     </div>
     </div>
@@ -240,6 +242,7 @@
         <input id="uLimit" type="number" min="0" max="1440" step="1" inputmode="numeric" placeholder="No limit">
         <small class="hint">New lessons count by their length; replays and questions are free. Empty: no limit.</small>
       </label>
+      <label class="check"><input id="uSounds" type="checkbox"> Sound effects and music</label>
       <label>Notes for the teacher (interests, sensitivities)
         <textarea id="uNotes" rows="3" placeholder="Loves dinosaurs. Gets scared by spiders."></textarea>
       </label>
@@ -259,6 +262,7 @@
       <label>Teacher's name <input id="sName"></label>
       <label>Voice <select id="sVoice"></select></label>
       <label>Speed <input id="sRate" type="range" min="0.75" max="1.5" step="0.05"> <span id="sRateVal"></span></label>
+      <label id="sVolumeRow">Sounds and music <input id="sVolume" type="range" min="0" max="1" step="0.05"> <span id="sVolumeVal"></span></label>
       <label>Model
         <select id="sModel">
           <option value="opus">Opus (best lessons)</option>

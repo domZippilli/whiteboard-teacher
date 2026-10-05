@@ -84,7 +84,7 @@ export function createAccounts(dataDir) {
     public(u, full = false) {
       if (!u) return null;
       const out = { id: u.id, name: u.name, avatar: u.avatar, role: u.role, locked: !!u.secret };
-      if (full) Object.assign(out, { ageBand: u.ageBand, notes: u.notes || '', settings: u.settings || {}, dailyMinutes: u.dailyMinutes || null, createdAt: u.createdAt });
+      if (full) Object.assign(out, { ageBand: u.ageBand, notes: u.notes || '', settings: u.settings || {}, dailyMinutes: u.dailyMinutes || null, sounds: u.sounds !== false, createdAt: u.createdAt });
       return out;
     },
 
@@ -139,6 +139,7 @@ export function createAccounts(dataDir) {
         ageBand: AGE_BANDS.includes(ageBand) ? ageBand : (role === 'admin' ? 'adult' : '8-12'),
         notes: String(notes || '').slice(0, 2000),
         dailyMinutes: dailyMinutes(fields.dailyMinutes),
+        ...(fields.sounds === false ? { sounds: false } : {}), // sound effects and music; on unless turned off
         settings: {},
         createdAt: new Date().toISOString(),
       };
@@ -156,6 +157,7 @@ export function createAccounts(dataDir) {
       if (fields.ageBand !== undefined && AGE_BANDS.includes(fields.ageBand)) u.ageBand = fields.ageBand;
       if (fields.notes !== undefined) u.notes = String(fields.notes || '').slice(0, 2000);
       if (fields.dailyMinutes !== undefined) u.dailyMinutes = dailyMinutes(fields.dailyMinutes);
+      if (fields.sounds !== undefined) { if (fields.sounds === false) u.sounds = false; else delete u.sounds; }
       if (fields.settings && typeof fields.settings === 'object') u.settings = { ...(u.settings || {}), ...fields.settings };
       if (fields.role !== undefined && fields.role !== u.role) {
         if (u.role === 'admin' && users.filter(isAdmin).length === 1) throw Object.assign(new Error("Can't remove the last admin"), { status: 400 });

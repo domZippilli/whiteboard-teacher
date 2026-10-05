@@ -353,3 +353,24 @@ button.danger { color: #d23a2f !important; margin-left: auto; }
   .hand, #endQ, #start, #prep.low { padding-bottom: 12px; }
   .prep-card, .feedback { padding: 16px 20px; max-height: 100%; overflow-y: auto; }
 }
+
+/* Admin: sounds */
+.sounds { margin-top: 36px; display: flex; flex-direction: column; gap: 10px; }
+.sounds .hint { margin: 0; }
+.sounds h3.sub { margin: 12px 0 0; font-size: 15px; }
+.music-list { display: flex; flex-direction: column; gap: 8px; }
+.music-card { background: var(--card); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.music-card .head { align-items: baseline; gap: 10px; }
+.music-card .status { margin-left: auto !important; }
+.music-card textarea { font: inherit; font-size: 14px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); resize: vertical; }
+.music-card .row { align-items: center; }
+.music-card .row button { border-radius: 999px; padding: 6px 14px; }
+.music-card .make { border: 0; background: var(--accent); color: white; font-weight: 600; }
+.music-card .make:disabled { opacity: .5; }
+.music-card .secs { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+.music-card .secs input { width: 64px; font: inherit; font-size: 14px; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+.fx-list { display: flex; flex-direction: column; gap: 2px; max-height: 420px; overflow-y: auto; }
+.fx-row { display: flex; align-items: center; gap: 10px; background: var(--card); border-radius: 8px; padding: 4px 10px; }
+.fx-row .t { flex: 1; font-size: 14px; }
+.fx-row .n { white-space: nowrap; }
+.fx-row button { border-radius: 999px; padding: 3px 10px; }

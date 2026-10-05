@@ -1,13 +1,14 @@
 // Backends: which service does each job. See PLAN-CONFIGURABLE-BACKENDS.md.
 //
-// Jobs: lessons (scripts, answers, quizzes), utility (screening, profile updates), voice, listening.
+// Jobs: lessons (scripts, answers, quizzes), utility (screening, profile updates), voice, listening,
+// sounds (sound effects and the music library).
 // Each job has an ordered list of backends: the first healthy one is used, the rest are fallbacks.
 // Config comes from data/config.json (edited in Admin › Backends); without it, from .env, which
 // reproduces the original setup (claude CLI + ElevenLabs, Kokoro as the free fallback).
 //
 // config.json shape:
 //   { "backends": { "<id>": { "type": "<type>", ...settings } },
-//     "jobs": { "lessons": ["<id>", ...], "utility": [...], "voice": [...], "listening": [...] } }
+//     "jobs": { "lessons": ["<id>", ...], "utility": [...], "voice": [...], "listening": [...], "sounds": [...] } }
 // Secret settings are a string, or { "env": "VAR" }, or { "op": "op://vault/item/field" }.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -20,11 +21,12 @@ import * as openaiSpeech from './voice/openai-speech.js';
 import * as openaiTranscribe from './listening/openai-transcribe.js';
 import * as browserModel from './voice/browser-model.js';
 import * as browserTranscribe from './listening/browser-transcribe.js';
+import * as elevenlabsSounds from './sounds/elevenlabs-sounds.js';
 
-const TYPES = Object.fromEntries([claudeCli, anthropicMessages, openaiChat, elevenlabs, openaiSpeech, browserModel, elevenlabsStt, openaiTranscribe, browserTranscribe].map(m => [m.type, m]));
-export const JOBS = ['lessons', 'utility', 'voice', 'listening'];
+const TYPES = Object.fromEntries([claudeCli, anthropicMessages, openaiChat, elevenlabs, openaiSpeech, browserModel, elevenlabsStt, openaiTranscribe, browserTranscribe, elevenlabsSounds].map(m => [m.type, m]));
+export const JOBS = ['lessons', 'utility', 'voice', 'listening', 'sounds'];
 // Which kind of backend each job takes.
-const JOB_KIND = { lessons: 'text', utility: 'text', voice: 'voice', listening: 'listening' };
+const JOB_KIND = { lessons: 'text', utility: 'text', voice: 'voice', listening: 'listening', sounds: 'sounds' };
 
 // ElevenLabs voices offered by default, by first name (shared-library voices).
 const ELEVENLABS_VOICES = [
@@ -47,6 +49,7 @@ function envConfig(env) {
           concurrency: +env.ELEVENLABS_CONCURRENCY || 2,
         },
         'elevenlabs-stt': { type: 'elevenlabs-stt', apiKey: keyRef, model: env.ELEVENLABS_STT_MODEL || 'scribe_v2' },
+        'elevenlabs-sounds': { type: 'elevenlabs-sounds', apiKey: keyRef },
       } : {}),
       // Free voice that runs in the learner's browser: the fallback when ElevenLabs can't speak.
       kokoro: { type: 'browser-model', engine: 'kokoro' },
@@ -56,8 +59,22 @@ function envConfig(env) {
       utility: ['claude-utility'],
       voice: keyRef ? ['elevenlabs', 'kokoro'] : ['kokoro'],
       listening: keyRef ? ['elevenlabs-stt'] : [],
+      sounds: keyRef ? ['elevenlabs-sounds'] : [],
     },
   };
+}
+
+// Configs saved before the sounds job existed: when there's an ElevenLabs voice, offer sounds with
+// the same key (shown in Admin › Backends; saving makes it permanent, removing it sticks).
+function addSoundsJob(config) {
+  if (config.jobs?.sounds) return config;
+  const el = Object.entries(config.backends || {}).find(([, s]) => s.type === 'elevenlabs' && s.apiKey);
+  config.jobs = { ...(config.jobs || {}), sounds: [] };
+  if (el && !config.backends['elevenlabs-sounds']) {
+    config.backends['elevenlabs-sounds'] = { type: 'elevenlabs-sounds', apiKey: el[1].apiKey };
+    config.jobs.sounds = ['elevenlabs-sounds'];
+  }
+  return config;
 }
 
 const httpError = (status, message) => Object.assign(new Error(message), { status });
@@ -67,7 +84,7 @@ const secretFields = type => (TYPES[type]?.meta.fields || []).filter(f => f.kind
 export function loadBackends({ dataDir, env, opRead, defaults }) {
   const file = path.join(dataDir, 'config.json');
   let config;
-  try { config = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { config = envConfig(env); }
+  try { config = addSoundsJob(JSON.parse(fs.readFileSync(file, 'utf8'))); } catch { config = envConfig(env); }
 
   const opCache = new Map(); // op reads are slow (a CLI call): once per reference
   const resolveSecret = v => {
@@ -203,6 +220,9 @@ export function loadBackends({ dataDir, env, opRead, defaults }) {
         } else if (kind === 'voice') {
           if (b.capabilities.runsIn === 'browser') return { ok: true, browser: b.clientSpec(b.defaultVoice), ms: 0 };
           const r = await b.speak({ text: 'Testing, one, two, three.', voice: catalogFor(b).default || b.defaultVoice });
+          result = { audio: `data:${r.mime};base64,${r.audio.toString('base64')}` };
+        } else if (kind === 'sounds') {
+          const r = await b.effect({ text: 'a single soft wooden knock', seconds: 0.6 });
           result = { audio: `data:${r.mime};base64,${r.audio.toString('base64')}` };
         } else if (b.capabilities?.runsIn === 'browser') {
           return { ok: true, browserListening: b.clientSpec(), ms: 0, message: 'Runs in the browser: try the mic to test it' };

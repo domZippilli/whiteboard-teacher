@@ -138,6 +138,7 @@ export function createAccountUI({ api, show, onSignedIn, onShowLessons, onPrevie
     $('#uTeacher').value = u.settings?.teacher || '';
     $('#uNotes').value = u.notes || '';
     $('#uLimit').value = u.dailyMinutes || '';
+    $('#uSounds').checked = u.sounds !== false;
     $('#uSecret').value = '';
     $('#uNoPin').checked = !isNew && !u.locked;
     $('#uErr').textContent = '';
@@ -164,6 +165,7 @@ export function createAccountUI({ api, show, onSignedIn, onShowLessons, onPrevie
         name: $('#uName').value, avatar: getAvatar(), role: $('#uRole').value, ageBand: $('#uBand').value,
         notes: $('#uNotes').value, settings: { teacher: $('#uTeacher').value.trim() || undefined },
         dailyMinutes: $('#uRole').value === 'admin' ? null : (+$('#uLimit').value || null),
+        sounds: $('#uSounds').checked,
       };
       const secret = $('#uSecret').value;
       if (secret) body.secret = secret;
@@ -185,6 +187,7 @@ export function createAccountUI({ api, show, onSignedIn, onShowLessons, onPrevie
     utility: ['Screening & profiles', 'Checks topics against the content rules; updates learning profiles'],
     voice: ['Voice', 'Speaks the lessons (falls back down the list)'],
     listening: ['Listening', 'Turns spoken questions into text (none = no mic buttons)'],
+    sounds: ['Sounds', 'Sound effects the teacher asks for, and the music library (none = made-up music only)'],
   };
   async function renderBackends({ onSaved, note = '' } = {}) {
     const box = $('#adminBackends');
@@ -392,6 +395,79 @@ export function createAccountUI({ api, show, onSignedIn, onShowLessons, onPrevie
     }
   }
 
+  // ----- admin: sounds -----
+  // The music for the gaps (made once, from a description) and the sound effects lessons have used.
+  async function renderSounds({ onChanged } = {}) {
+    const box = $('#adminSounds');
+    const view = await api('admin/sounds');
+    box.innerHTML = `<div class="admin-head"><h2>Sounds</h2></div>
+      <p class="hint">${view.backend
+        ? `Made by ${esc(view.backend)}. Music plays while waiting, during the quiz and at a few moments; until a track is made, the app makes up a simple tune.`
+        : 'No sounds service is set up (Admin › Backends › Sounds), so there are no sound effects and the app makes up simple music.'}
+        Learners can be switched off in People › Edit; each learner sets their own volume in Settings.</p>
+      <h3 class="sub">Music</h3><div class="music-list"></div>
+      <h3 class="sub">Sound effects <span class="hint">(made when a lesson first uses them, then reused)</span></h3><div class="fx-list"></div>`;
+    const play = url => { const a = new Audio(url); a.play().catch(() => {}); return a; };
+    const list = box.querySelector('.music-list');
+    for (const m of view.music) {
+      const card = document.createElement('div');
+      card.className = 'music-card';
+      card.innerHTML = `<div class="row head"><b></b><span class="hint what"></span><span class="hint status"></span></div>
+        <textarea rows="2"></textarea>
+        <div class="row"><label class="secs">Seconds <input type="number" min="3" max="120" step="1"></label>
+          <button type="button" class="ghost play">▶ Play</button>
+          <button type="button" class="make"></button>
+          <button type="button" class="ghost remove">Remove</button>
+          <span class="hint msg"></span></div>`;
+      card.querySelector('b').textContent = m.label;
+      card.querySelector('.what').textContent = m.hint;
+      card.querySelector('.status').textContent = m.url ? `made ${new Date(m.createdAt).toLocaleDateString()}` : 'not made yet: a made-up tune plays';
+      const text = card.querySelector('textarea'), secs = card.querySelector('input');
+      text.value = m.prompt || m.defaultPrompt;
+      secs.value = m.seconds || m.defaultSeconds;
+      const msg = card.querySelector('.msg');
+      const cost = () => { msg.textContent = `about ${Math.round(+secs.value * 15)} credits`; };
+      text.oninput = secs.oninput = cost;
+      card.querySelector('.play').classList.toggle('hidden', !m.url);
+      card.querySelector('.remove').classList.toggle('hidden', !m.url);
+      card.querySelector('.play').onclick = () => play(m.url);
+      const make = card.querySelector('.make');
+      make.textContent = m.url ? 'Make again' : 'Make';
+      make.disabled = !view.backend;
+      make.onclick = async () => {
+        make.disabled = true;
+        msg.textContent = 'Making… (can take a minute)';
+        try {
+          await api('admin/music', { slot: m.slot, prompt: text.value, seconds: +secs.value });
+          await onChanged?.();
+          await renderSounds({ onChanged });
+          const fresh = (await api('admin/sounds')).music.find(x => x.slot === m.slot);
+          if (fresh?.url) play(fresh.url);
+        } catch (err) { msg.textContent = err.message; make.disabled = false; }
+      };
+      card.querySelector('.remove').onclick = async () => {
+        if (!confirm(`Remove the ${m.label} music? A made-up tune plays instead.`)) return;
+        await api('admin/music?slot=' + m.slot, null, 'DELETE');
+        await onChanged?.();
+        renderSounds({ onChanged });
+      };
+      list.appendChild(card);
+    }
+    const fx = box.querySelector('.fx-list');
+    if (!view.effects.length) fx.innerHTML = '<p class="hint">None yet.</p>';
+    for (const e of view.effects.slice(0, 200)) {
+      const r = document.createElement('div');
+      r.className = 'fx-row';
+      r.innerHTML = `<button type="button" class="ghost play" title="Play">▶</button><span class="t"></span>
+        <span class="hint n"></span><button type="button" class="ghost del" title="Delete (made again if a lesson needs it)">✕</button>`;
+      r.querySelector('.t').textContent = `${e.kind === 'music' ? '🎵 ' : ''}${e.text}`;
+      r.querySelector('.n').textContent = `${e.seconds}s · used ${e.uses || 1}×`;
+      r.querySelector('.play').onclick = () => play(e.url);
+      r.querySelector('.del').onclick = async () => { await api('admin/sounds?key=' + e.key, null, 'DELETE'); r.remove(); };
+      fx.appendChild(r);
+    }
+  }
+
   // ----- admin: content rules -----
   async function renderPolicies() {
     const box = $('#adminPolicies');
@@ -519,5 +595,5 @@ export function createAccountUI({ api, show, onSignedIn, onShowLessons, onPrevie
     }
   }
 
-  return { showSetup, showPicker, askAdminPassword, renderUsers, renderPolicies, renderRefusals, renderHistory, renderVoices, renderBackends };
+  return { showSetup, showPicker, askAdminPassword, renderUsers, renderPolicies, renderRefusals, renderHistory, renderVoices, renderBackends, renderSounds };
 }
