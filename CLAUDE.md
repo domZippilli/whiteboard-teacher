@@ -177,7 +177,7 @@ See `PLAN.md` for status, decisions and roadmap.
 - Player: after the step, `callOn` shows the "Your turn!" card (`askStudent`): tap a choice / keys 1-4, or say
   or type (hold A works; "the second one" or a choice's words count as that choice, `matchChoice`). Choices and
   "not sure" play the scripted reply instantly; other words go to `POST answer`, which forks the lesson with
-  sonnet for a 1-2 step reply (~3 s; no `clear`), with `reveal` as the fallback.
+  its own model for a 1-2 step reply (~5 s with Opus; no `clear`), with `reveal` as the fallback.
 - Answers are kept in `lesson.answers` (owner only) and feed the learning profile.
 
 ## End of lesson

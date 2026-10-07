@@ -622,7 +622,7 @@ Return: {"steps":[...]}`,
     const next = lesson.sections[section]?.steps?.[step + 1]?.say || lesson.sections[section + 1]?.steps?.[0]?.say || '';
     const { json } = await askJson({
       teacher: lesson.teacher, tone: lesson.tone, policy: lessonPolicy(lesson), profile: readProfile(lesson.owner),
-      model: 'sonnet', // a quick reply matters more than the best one; claude-cli only
+      model: lesson.model, // the lesson's own model: one teacher's voice (Opus was ~2 s slower than Sonnet here)
       mode: 'fork', lesson,
       prompt: `During part ${section + 1}, step ${step + 1}, you asked the student: "${entry.asked}"
 ${choices}${ask.expect ? `A good answer: ${ask.expect}\n` : ''}They answered: "${text}"
