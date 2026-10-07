@@ -56,6 +56,34 @@ const accounts = createAccounts(DATA);
 
 const SCRIPT_API = () => fs.readFileSync(path.join(ROOT, 'docs/SCRIPT_API.md'), 'utf8');
 const SCRIPT_SOUNDS = () => fs.readFileSync(path.join(ROOT, 'docs/SCRIPT_SOUNDS.md'), 'utf8');
+const SCRIPT_ASK = () => fs.readFileSync(path.join(ROOT, 'docs/SCRIPT_ASK.md'), 'utf8');
+
+// ---------- calling on the student ----------
+// A step may end with `ask` (docs/SCRIPT_ASK.md): multiple choice with scripted replies, or an open
+// question answered live. On for a lesson unless the learner turned it off (settings.askMe === false).
+const askFor = user => user?.settings?.askMe !== false;
+const asStep = r => (r && typeof r === 'object' && !Array.isArray(r) && (typeof r.say === 'string' || Array.isArray(r.draw)) ? r : null);
+// Keep a part's asks valid and within the limit (one per part), in place; drop the rest.
+function limitAsks(steps, max = 1) {
+  let n = 0;
+  for (const s of steps || []) {
+    if (!s || s.ask === undefined) continue;
+    const a = s.ask;
+    let ok = false;
+    if (a && typeof a === 'object' && n < max) {
+      a.choices = Array.isArray(a.choices) ? a.choices.filter(c => c && typeof c.text === 'string' && c.text.trim()).slice(0, 4) : [];
+      for (const c of a.choices) c.reply = asStep(Array.isArray(c.reply) ? c.reply[0] : c.reply) || undefined;
+      if (!Number.isInteger(a.answer) || !a.choices[a.answer]) delete a.answer;
+      a.reveal = asStep(a.reveal) || (a.answer !== undefined ? a.choices[a.answer].reply : null);
+      const choicesOk = a.choices.length >= 2 && a.choices.every(c => c.reply);
+      if (!choicesOk) a.choices = [];
+      a.open = !choicesOk && !!a.open;
+      ok = !!a.reveal && (choicesOk || a.open);
+    }
+    if (ok) n++; else delete s.ask;
+  }
+}
+const stripAsks = steps => { for (const s of steps || []) if (s) delete s.ask; };
 
 // Sound effects and music (lessons/_sounds/, shared by all lessons; see soundlib.js).
 const sounds = createSoundLibrary({ dir: path.join(LESSONS, '_sounds'), backends, urlFor: file => `/lessons/_sounds/${file}` });
@@ -76,13 +104,13 @@ const TONES = {
   goofy: 'Goofy: playful and silly. Puns, absurd analogies, funny doodles on the board, comic timing (use the audio cues: [laughs], [gasps], [whispers], dramatic pauses), maybe a running gag. Still teach the material accurately and completely; the silliness is how you make it stick, not a replacement for substance.',
 };
 
-function system_(teacher, tone, policy, profile = '', withSounds = false) {
+function system_(teacher, tone, policy, profile = '', withSounds = false, withAsk = false) {
   return `You are ${teacher || 'Claude'}, a brilliant${TONES[tone] ? '' : ', warm'} teacher giving a live lesson at a whiteboard. You write lessons as scripts that a program performs: your words are spoken by a text-to-speech voice and your drawing is drawn live in sync. Be the teacher you'd most want to learn from: make it vivid, visual and genuinely interesting.
 ${TONES[tone] ? `\nYour teaching personality for this lesson, chosen by the student: ${TONES[tone]}\n` : ''}${policyPrompt(policy)}${profilePrompt(profile)}
 Here is the complete reference for the script format:
 
 ${SCRIPT_API()}
-${withSounds ? `\n${SCRIPT_SOUNDS()}\n` : ''}
+${withSounds ? `\n${SCRIPT_SOUNDS()}\n` : ''}${withAsk ? `\n${SCRIPT_ASK()}\n` : ''}
 Every reply must be ONLY valid JSON, no prose before or after, no code fences.`;
 }
 
@@ -213,6 +241,7 @@ async function updateProfile(lessonId) {
     lesson: { title: lesson.outline?.title, asked: lesson.topic, minutes: lesson.minutes, style: lesson.tone || 'any', level: lesson.level || 'any', date: lesson.createdAt?.slice(0, 10) },
     finished: !!lesson.progress && lesson.progress.section >= (lesson.outline?.sections?.length || 1) - 1,
     questionsAsked: (lesson.asides || []).map(a => a.question),
+    answersWhenCalledOn: (lesson.answers || []).map(a => ({ asked: a.asked, answered: a.unsure ? "(didn't know)" : a.choice ?? a.said, ...(a.right !== undefined ? { right: a.right } : {}) })),
     quiz: lastQuiz ? {
       score: `${lastQuiz.score}/${lastQuiz.total}`,
       missed: (lastQuiz.answers || []).map((a, i) => (quiz[i] && a !== quiz[i].answer ? { question: quiz[i].q, chose: quiz[i].choices[a], correct: quiz[i].choices[quiz[i].answer] } : null)).filter(Boolean),
@@ -295,8 +324,8 @@ Reply with ONLY JSON: {"decision":"allow|adapt|refuse","note":"...","message":".
 // started it; if another backend has to take over, it starts afresh with the lesson so far as context.
 // Returns { json, convo, backend } (convo/backend to store on the lesson when continuing).
 // research: text added to the prompt for a backend that can look things up on the web (planning only).
-async function askJson({ teacher, tone, policy, profile, model, mode, lesson, name, prompt, sounds: withSounds, research }) {
-  const system = system_(teacher, tone, policy, profile, withSounds ?? !!lesson?.sounds);
+async function askJson({ teacher, tone, policy, profile, model, mode, lesson, name, prompt, sounds: withSounds, ask: withAsk, research }) {
+  const system = system_(teacher, tone, policy, profile, withSounds ?? !!lesson?.sounds, withAsk ?? !!lesson?.interactive);
   const candidates = backends.jobs.lessons.filter(backends.healthy);
   if (!candidates.length) throw httpError(503, "The teacher isn't available right now. Please try again soon.");
   let lastError;
@@ -435,8 +464,11 @@ Return: {"steps":[...]}`,
   // Sounds: within the limits (or none), and made in the background so they're ready to play.
   if (lesson.sounds) {
     limitSounds(section.steps, { effects: LIMITS.effectsPerPart, musicLeft: Math.max(0, LIMITS.musicPerLesson - musicUsed(lesson)) });
+    for (const st of section.steps || []) if (st?.ask) for (const r of [...(st.ask.choices || []).map(c => c.reply), st.ask.reveal]) if (r) limitSounds([r], { effects: 1, musicLeft: 0 });
     sounds.warm(section.steps);
+    sounds.warm((section.steps || []).flatMap(st => st?.ask ? [...(st.ask.choices || []).map(c => c.reply), st.ask.reveal].filter(Boolean) : []));
   } else stripSounds(section.steps);
+  if (lesson.interactive) limitAsks(section.steps); else stripAsks(section.steps);
   // The conversation may have moved to another backend (fallback): remember where it lives now.
   await updateLesson(id, l => { l.sections[index] = section; l.convo = convo; l.convoBackend = backend; });
   return section;
@@ -507,8 +539,9 @@ const api = {
     await screen(topic, 'lesson topic', ctx.user);
     const n = Math.max(1, Math.min(40, Math.round(minutes / 1.75)));
     const withSounds = soundsFor(ctx.user);
+    const interactive = askFor(ctx.user);
     const { json: outline, convo, backend, researched } = await askJson({
-      teacher, tone, policy: policyFor(ctx.user), profile: readProfile(ctx.user.id), model, sounds: withSounds,
+      teacher, tone, policy: policyFor(ctx.user), profile: readProfile(ctx.user.id), model, sounds: withSounds, ask: interactive,
       research: RESEARCH_NOTE,
       mode: 'start', name: `Lesson: ${topic}`.slice(0, 80),
       prompt: `A student asked: "${topic}"
@@ -520,7 +553,7 @@ I'll then ask you for each part in turn.`,
     });
     const id = `${new Date().toISOString().slice(0, 10)}-${slug(outline.title || topic)}-${crypto.randomBytes(2).toString('hex')}`;
     const lesson = {
-      id, owner: ctx.user.id, convo, convoBackend: backend, topic, minutes, level, tone, teacher, model: model || null, sounds: withSounds,
+      id, owner: ctx.user.id, convo, convoBackend: backend, topic, minutes, level, tone, teacher, model: model || null, sounds: withSounds, interactive,
       createdAt: new Date().toISOString(), outline, sections: [], asides: [], feedback: [], ...(researched ? { researched: true } : {}),
     };
     await fsp.mkdir(path.join(lessonDir(id), 'audio'), { recursive: true });
@@ -566,9 +599,46 @@ Return: {"steps":[...]}`,
     });
     if (lesson.sounds) { limitSounds(aside.steps, { effects: LIMITS.effectsPerAside, musicLeft: 0 }); sounds.warm(aside.steps); }
     else stripSounds(aside.steps);
+    stripAsks(aside.steps);
     const entry = { section, step, question, steps: aside.steps, askedAt: new Date().toISOString() };
     await updateLesson(id, l => { l.asides.push(entry); });
     return entry;
+  },
+
+  // The student answered a question the teacher asked mid-lesson (a step's `ask`). Recorded for the
+  // learning profile. A choice or "not sure" is answered by the script itself; free words get a short
+  // live reply from a fork of the lesson's conversation: { steps }.
+  async 'POST answer'({ id, section, step, choice, text, unsure }, _, ctx) {
+    const lesson = await ownLesson(ctx, id);
+    const st = lesson.sections[section]?.steps?.[step];
+    const ask = st?.ask;
+    if (!ask) throw httpError(400, 'No question there');
+    text = String(text || '').trim().slice(0, 500);
+    const entry = { section, step, asked: (st.say || '').replace(/\[[^\]]*\]\s*/g, '').trim(), at: new Date().toISOString(),
+      ...(unsure ? { unsure: true } : Number.isInteger(choice) && ask.choices?.[choice] ? { choice: ask.choices[choice].text, ...(ask.answer !== undefined ? { right: choice === ask.answer } : {}) } : { said: text }) };
+    const record = () => { if (lesson.owner === ctx.user.id) updateLesson(id, l => { (l.answers ||= []).push(entry); }).catch(() => {}); };
+    if (!entry.said) { record(); return {}; }
+    const choices = ask.choices?.length ? `The choices you offered: ${ask.choices.map(c => `"${c.text}"`).join(', ')}${ask.answer !== undefined ? ` (right: "${ask.choices[ask.answer].text}")` : ''}.\n` : '';
+    const next = lesson.sections[section]?.steps?.[step + 1]?.say || lesson.sections[section + 1]?.steps?.[0]?.say || '';
+    const { json } = await askJson({
+      teacher: lesson.teacher, tone: lesson.tone, policy: lessonPolicy(lesson), profile: readProfile(lesson.owner),
+      model: 'sonnet', // a quick reply matters more than the best one; claude-cli only
+      mode: 'fork', lesson,
+      prompt: `During part ${section + 1}, step ${step + 1}, you asked the student: "${entry.asked}"
+${choices}${ask.expect ? `A good answer: ${ask.expect}\n` : ''}They answered: "${text}"
+Respond to what they actually said, right now, in one short step (two at most, under 50 words in all): if they're right,
+say so and build on it; if partly right, credit that and add the rest; if wrong or off-track, be kind and give the answer.
+The board still shows what was on it; you may add to it but don't clear it. The lesson then continues straight on with:
+"${next.slice(0, 300)}", so lead into that and don't say it yourself.
+Return: {"steps":[...]}`,
+    });
+    const steps = (json.steps || []).filter(s => s && typeof s === 'object').slice(0, 2);
+    stripAsks(steps);
+    if (lesson.sounds) limitSounds(steps, { effects: 1, musicLeft: 0 }); else stripSounds(steps);
+    for (const s of steps) for (const o of s.draw || []) if (o?.op === 'clear') o.op = 'pause';
+    entry.reply = steps.map(s => s.say || '').join(' ').slice(0, 500);
+    record();
+    return { steps };
   },
 
   // End-of-lesson quiz, written in a fork of the lesson's session (so it knows exactly what was
@@ -675,7 +745,7 @@ Return: {"steps":[...]}`,
   // Per-user settings. Learners may change their voice, speed and lesson defaults; teacher name
   // and model are admin choices.
   async 'PUT settings'(body, _, ctx) {
-    const allowed = ['voice', 'rate', 'minutes', 'level', 'tone', 'captions', 'browserVoice', 'volume'];
+    const allowed = ['voice', 'rate', 'minutes', 'level', 'tone', 'captions', 'browserVoice', 'volume', 'askMe'];
     if (ctx.user.role === 'admin') allowed.push('teacher', 'model');
     const picked = Object.fromEntries(Object.entries(body).filter(([k]) => allowed.includes(k)));
     return accounts.saveSettings(ctx.user, picked);

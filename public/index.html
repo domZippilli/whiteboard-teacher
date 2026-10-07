@@ -157,6 +157,19 @@
           </div>
         </div>
       </div>
+      <!-- The teacher calls on the student: tap a choice, or say/type an answer -->
+      <div id="askCard" class="prep hidden">
+        <div class="prep-card ask-card">
+          <div class="ask-top"><span class="your-turn">Your turn!</span><span id="askQ" class="ask-q"></span></div>
+          <div id="askChoices" class="choices"></div>
+          <form id="askForm2" class="ask">
+            <input id="askInput" autocomplete="off" placeholder="Say or type your answer">
+            <button type="button" id="askMic" class="mic" title="Say your answer" aria-label="Record answer">🎤</button>
+            <button type="submit">Answer</button>
+          </form>
+          <div class="row center"><button type="button" id="askUnsure" class="ghost">I'm not sure</button></div>
+        </div>
+      </div>
       <div id="endQ" class="prep hidden">
         <div class="prep-card end-card">
           <h2 id="endTitle">Any questions?</h2>
@@ -263,6 +276,7 @@
       <label>Voice <select id="sVoice"></select></label>
       <label>Speed <input id="sRate" type="range" min="0.75" max="1.5" step="0.05"> <span id="sRateVal"></span></label>
       <label id="sVolumeRow">Sounds and music <input id="sVolume" type="range" min="0" max="1" step="0.05"> <span id="sVolumeVal"></span></label>
+      <label class="check-row"><input id="sAskMe" type="checkbox"> The teacher asks me questions during lessons</label>
       <label>Model
         <select id="sModel">
           <option value="opus">Opus (best lessons)</option>

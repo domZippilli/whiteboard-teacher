@@ -21,7 +21,7 @@ const api = async (path, body, method, retried) => {
 // ---------- settings ----------
 
 // Settings belong to the signed-in user and live on the server (so a shared tablet follows the profile).
-const DEFAULTS = { teacher: 'Claude', voice: '', rate: 1, model: 'opus', minutes: 5, level: '', tone: '', captions: false, volume: 0.8 };
+const DEFAULTS = { teacher: 'Claude', voice: '', rate: 1, model: 'opus', minutes: 5, level: '', tone: '', captions: false, volume: 0.8, askMe: true };
 const settings = { ...DEFAULTS };
 let me = null; // { user, admin }
 let settingsTimer;
@@ -525,6 +525,8 @@ class Player {
         renderProgress();
         await this.playStep(steps[this.pos.step], alive);
         if (!alive()) return;
+        if (steps[this.pos.step].ask) await this.callOn(section, this.pos.step, steps[this.pos.step], alive);
+        if (!alive()) return;
         this.pos.step++;
         saveProgress();
       }
@@ -628,6 +630,38 @@ class Player {
         speechSynthesis.speak(u);
       }
     });
+  }
+
+  // The step ended by calling on the student (`ask`): wait for their answer, then play the reply: the
+  // script's own for a choice or "not sure", or a quick live one for their own words.
+  async callOn(section, index, step, alive) {
+    const ask = step.ask;
+    const l = this.lesson;
+    const replies = [...(ask.choices || []).map(c => c.reply), ask.reveal].filter(Boolean);
+    replies.forEach(r => speech(r.say, l.id));
+    prefetchSounds(replies, l.id);
+    const answer = await askStudent(step, alive);
+    if (!answer || !alive()) return;
+    let reply;
+    if (answer.text === undefined) {
+      reply = [answer.unsure ? ask.reveal : ask.choices[answer.choice].reply];
+      api('answer', { id: l.id, section, step: index, ...answer }).catch(() => {});
+    } else {
+      showPrep('Thinking about your answer…', false, 'question');
+      $('#prep').classList.add('low');
+      hmm();
+      try { reply = (await api('answer', { id: l.id, section, step: index, text: answer.text })).steps; }
+      catch (e) { console.warn('answer', e.message); }
+      if (!reply?.length) reply = [ask.reveal];
+      await speech(reply[0]?.say, l.id);
+      lineAudio.pause();
+      hidePrep();
+      if (!alive()) return;
+    }
+    for (const st of reply.filter(Boolean)) {
+      await this.playStep(st, alive);
+      if (!alive()) return;
+    }
   }
 
   // A `sound` or `music` op reached the board. If it's still being made, play it when it arrives,
@@ -738,6 +772,58 @@ class Player {
     }
     this.seek(this.pos.section, this.pos.step);
   }
+}
+
+// ---------- the teacher calls on the student ----------
+// Shows the "your turn" card for a step's `ask`. Resolves with { choice } | { text } | { unsure }, or null
+// if the lesson moved on (seek, home) meanwhile.
+let asking = null;
+function askStudent(step, alive) {
+  return new Promise(resolve => {
+    const ask = step.ask;
+    const card = $('#askCard');
+    const finish = answer => {
+      if (asking?.finish !== finish) return;
+      clearInterval(watch);
+      asking = null;
+      stopRecording(); mic.rec = null;
+      card.classList.add('hidden');
+      resolve(answer);
+    };
+    const watch = setInterval(() => { if (!alive()) finish(null); }, 150);
+    asking = { finish, choices: ask.choices || [] };
+    $('#askQ').textContent = stripCues(step.say || '');
+    const list = $('#askChoices');
+    list.replaceChildren();
+    (ask.choices || []).forEach((c, i) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.innerHTML = `<b>${i + 1}</b>`;
+      b.append(' ' + c.text);
+      b.onclick = () => finish({ choice: i });
+      list.appendChild(b);
+    });
+    const input = $('#askInput');
+    input.value = '';
+    input.placeholder = config.listening ? `${ask.choices?.length ? 'Or say' : 'Say'} or type your answer${touchScreen() ? '' : ' (hold A to talk)'}` : 'Type your answer';
+    $('#askUnsure').onclick = () => finish({ unsure: true });
+    card.classList.remove('hidden');
+    if (!touchScreen() && !ask.choices?.length) input.focus();
+  });
+}
+// A typed or spoken answer that names one of the choices ("2", "the second one", "gas") counts as that choice.
+// Order words first, so "the second one" is 2, not 1.
+const ORDINALS = [['first', 'second', 'third', 'fourth'], ['1', '2', '3', '4'], ['one', 'two', 'three', 'four']];
+function matchChoice(text, choices) {
+  const t = text.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!t || !choices.length) return -1;
+  const words = t.split(' ');
+  const byText = choices.findIndex(c => { const ct = c.text.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim(); return ct && (t === ct || (ct.length > 2 && ` ${t} `.includes(` ${ct} `))); });
+  if (byText >= 0) return byText;
+  if (words.length <= 4) {
+    for (const set of ORDINALS) { const i = set.findIndex(w => words.includes(w)); if (i >= 0) return i < choices.length ? i : -1; }
+  }
+  return -1;
 }
 
 const player = new Player();
@@ -1362,6 +1448,24 @@ function wire() {
   };
   $('#fbReplay').onclick = () => { fb.classList.add('hidden'); player.endRound = 0; player.seek(0, 0); };
 
+  // Answering when the teacher calls on you.
+  $('#askForm2').onsubmit = e => {
+    e.preventDefault();
+    const text = $('#askInput').value.trim();
+    if (!text || !asking) return;
+    const i = matchChoice(text, asking.choices);
+    asking.finish(i >= 0 ? { choice: i } : { text });
+  };
+  micButton($('#askMic'), $('#askInput'), text => {
+    $('#askInput').value = text;
+    $('#askForm2').requestSubmit();
+  });
+  document.addEventListener('keydown', e => {
+    if (!asking || e.target.matches('input, textarea')) return;
+    const n = +e.key;
+    if (n >= 1 && n <= asking.choices.length) { e.preventDefault(); asking.finish({ choice: n - 1 }); }
+  });
+
   // End-of-lesson questions
   $('#endForm').onsubmit = e => {
     e.preventDefault();
@@ -1408,6 +1512,7 @@ function wire() {
   const pttContext = () => {
     if (visible('#quiz')) return null;
     if (visible('#lesson') && visible('#endQ')) return 'end';
+    if (visible('#lesson') && visible('#askCard')) return 'answer';
     if (visible('#lesson')) return 'lesson';
     if (visible('#home')) return 'home';
     return null;
@@ -1415,7 +1520,7 @@ function wire() {
   const beginPTT = ctx => {
     // No listening backend: holding A just opens the question box.
     if (!config.listening) {
-      if (ctx === 'lesson') openHand(); else if (ctx === 'home') $('#q').focus(); else $('#endInput').focus();
+      if (ctx === 'lesson') openHand(); else if (ctx === 'home') $('#q').focus(); else if (ctx === 'answer') $('#askInput').focus(); else $('#endInput').focus();
       return;
     }
     const ask = (btn, input, form) => startRecording({ btn: $(btn), input: $(input), autoStop: false, hint: 'Listening… (let go of A to ask)' }, text => {
@@ -1424,6 +1529,7 @@ function wire() {
     });
     if (ctx === 'home') ask('#homeMic', '#q', '#askForm');
     else if (ctx === 'end') { stopCountdown(); ask('#endMic', '#endInput', '#endForm'); }
+    else if (ctx === 'answer') ask('#askMic', '#askInput', '#askForm2');
     else if (ctx === 'lesson') {
       if (!visible('#handBox')) openHand();
       ask('#micBtn', '#handQ', '#handForm');
@@ -1432,7 +1538,7 @@ function wire() {
   const isA = e => e.key === 'a' || e.key === 'A';
   // In an empty question box (home, raise-hand, end of lesson), A is held for push-to-talk but a tap
   // (or typing on) still types the letter.
-  const PTT_BOXES = ['q', 'handQ', 'endInput'];
+  const PTT_BOXES = ['q', 'handQ', 'endInput', 'askInput'];
   const typeLetter = () => {
     const { field, char } = ptt;
     field.setRangeText(char, field.selectionStart, field.selectionEnd, 'end');
@@ -1476,6 +1582,7 @@ function wire() {
     else if (ptt.ctx === 'lesson') openHand();
     else if (ptt.ctx === 'home') $('#q').focus();
     else if (ptt.ctx === 'end') $('#endInput').focus();
+    else if (ptt.ctx === 'answer') $('#askInput').focus();
     ptt = null;
   }, true);
 
@@ -1491,6 +1598,7 @@ function wire() {
     $('#sRateVal').textContent = `${settings.rate}×`;
     $('#sVolumeRow').classList.toggle('hidden', me?.user?.sounds === false);
     $('#sVolume').value = settings.volume ?? 0.8;
+    $('#sAskMe').checked = settings.askMe !== false;
     $('#sVolumeVal').textContent = volumeLabel(settings.volume ?? 0.8);
     $('#sModel').value = settings.model;
     $('#searchUrl').textContent = `${location.origin}/?q=%s`;
@@ -1525,6 +1633,7 @@ function wire() {
     settings.teacher = $('#sName').value.trim() || 'Claude';
     settings.rate = +$('#sRate').value;
     settings.model = $('#sModel').value;
+    settings.askMe = $('#sAskMe').checked;
     const v = $('#sVoice').value;
     if (config.tts) settings.voice = v; else settings.browserVoice = v;
     saveSettings();

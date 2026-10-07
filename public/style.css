@@ -374,3 +374,19 @@ button.danger { color: #d23a2f !important; margin-left: auto; }
 .fx-row .t { flex: 1; font-size: 14px; }
 .fx-row .n { white-space: nowrap; }
 .fx-row button { border-radius: 999px; padding: 3px 10px; }
+
+/* The teacher calls on the student */
+#askCard { align-items: flex-end; padding-bottom: 40px; }
+.ask-card { width: min(640px, 94%); display: flex; flex-direction: column; gap: 12px; text-align: left; }
+.ask-top { display: flex; flex-direction: column; gap: 4px; }
+.your-turn { font-family: 'Patrick Hand', cursive; font-size: 30px; color: var(--accent); }
+.ask-q { font-size: 17px; color: var(--muted); }
+.ask-card .ask { box-shadow: none; }
+.ask-card .row button { border-radius: 999px; padding: 8px 18px; }
+dialog label.check-row { display: flex; align-items: center; gap: 8px; color: var(--ink); }
+dialog label.check-row input { width: auto; margin: 0; display: inline; }
+@media (max-height: 520px) { #askCard { padding-bottom: 12px; } .your-turn { font-size: 24px; } }
+/* Short choices side by side, so the card hides less of the board. */
+.ask-card .choices { flex-direction: row; flex-wrap: wrap; }
+.ask-card .choices button { flex: 1 1 140px; }
+.ask-card { padding: 18px 24px; }

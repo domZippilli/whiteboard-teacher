@@ -153,6 +153,12 @@ Needed before learning profiles: the app will move to the homelab and be used fr
 - Per learner: admin switch (People › Edit), learner volume (Settings).
 - Maybe later: a free sounds backend (e.g. a local text-to-audio model on the homelab).
 
+## Calling on the student (2026-10-07)
+- ✅ `ask` on a step: multiple choice with scripted replies (instant) or open questions answered live
+  (sonnet fork, ~3 s); "I'm not sure" plays the teacher's reveal. One per part at most. Learner setting
+  "The teacher asks me questions during lessons". Answers feed the profile.
+- Maybe: let the profile shape how often (some kids love it, some don't).
+
 ## Next (polish)
 - **Faster start**: stream part 1 so playback begins within seconds instead of 30-60s.
 - **Layout safety net**: renderer-side bounds clamping / overlap nudging, without constraining the model.
