@@ -145,10 +145,13 @@ export function createSound(getCtx) {
     const t = ctx.currentTime + 0.02;
     for (const [s, at] of STINGS[slot] || STINGS.celebrate) note(hz(s + 12), t + at, { amp: 0.35, dur: at >= 0.9 ? 1.6 : 0.6, bus: musicBus });
   }
+  // Loudness of each gap's music: waiting music has the room to itself (the teacher isn't talking), so it
+  // plays at the track's own level; the quiz's sits under the questions.
+  const LOOP_LEVEL = { waiting: 2.2, quiz: 1 };
   // A gentle wandering pentatonic tune with a soft echo, until stopped. quiz: a bit perkier.
   function synthLoop(slot) {
     const out = new GainNode(ctx, { gain: 0 });
-    out.gain.linearRampToValueAtTime(1, ctx.currentTime + 1.5);
+    out.gain.linearRampToValueAtTime(LOOP_LEVEL[slot] ?? 1, ctx.currentTime + 1.5);
     const delay = new DelayNode(ctx, { delayTime: 0.36 });
     const fb = new GainNode(ctx, { gain: 0.32 });
     const lp = new BiquadFilterNode(ctx, { type: 'lowpass', frequency: 2500 });
@@ -197,7 +200,7 @@ export function createSound(getCtx) {
   }
   // Loop a track forever, crossfading its end into its start so the seam doesn't show.
   function fileLoop(url, slot) {
-    const out = new GainNode(ctx, { gain: 1 });
+    const out = new GainNode(ctx, { gain: LOOP_LEVEL[slot] ?? 1 });
     out.connect(musicBus);
     let stopped = false, timer = null, fallback = null;
     const srcs = new Set();

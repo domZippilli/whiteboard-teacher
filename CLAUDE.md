@@ -136,7 +136,7 @@ See `PLAN.md` for status, decisions and roadmap.
   player, which plays them through `<audio>` (pausable); late ones (>2.5 s) are skipped.
 - Music for the gaps (`MUSIC_SLOTS`: waiting, quiz, intro, celebrate, perfect): Admin › Sounds makes them
   (`POST admin/music`); `GET config` gives `music: { slot: url|null }`; null → generative synth tune.
-  Loops are crossfaded. Music ducks while the teacher speaks (`sound.duck`).
+  Loops are crossfaded. Music ducks while the teacher speaks (`sound.duck`); waiting music plays louder than the quiz's (`LOOP_LEVEL`).
 - `sounds` job: type `elevenlabs-sounds` (effects: `/v1/sound-generation`; music: `/v1/music`,
   instrumental). Older configs get it automatically when there's an ElevenLabs voice key (`addSoundsJob`).
 - Per learner: admin switch `user.sounds` (People › Edit, also stops sounds in existing lessons), volume
