@@ -1197,6 +1197,7 @@ function showFeedback() {
 
 function show(screen) {
   for (const s of ['home', 'lesson', 'picker', 'setup', 'admin']) $('#' + s).classList.toggle('hidden', screen !== s);
+  if (screen !== 'admin') account.stopPreview(); // a track previewed in Admin › Sounds
   $('#meMenu').classList.add('hidden');
   $('#feedback').classList.add('hidden');
   $('#handBox').classList.add('hidden');

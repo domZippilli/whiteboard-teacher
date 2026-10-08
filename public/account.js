@@ -397,8 +397,28 @@ export function createAccountUI({ api, show, onSignedIn, onShowLessons, onPrevie
 
   // ----- admin: sounds -----
   // The music for the gaps (made once, from a description) and the sound effects lessons have used.
+  // One preview at a time; its button turns into a stop button while it plays.
+  let preview = null; // { audio, btn, label }
+  const stopPreview = () => {
+    if (!preview) return;
+    preview.audio.pause();
+    preview.btn.textContent = preview.label;
+    preview = null;
+  };
+  const play = (url, btn) => {
+    const again = preview?.btn === btn;
+    stopPreview();
+    if (again || !url) return;
+    const audio = new Audio(url);
+    preview = { audio, btn, label: btn.textContent };
+    btn.textContent = btn.textContent.startsWith('▶ ') ? '■ Stop' : '■';
+    audio.onended = audio.onerror = () => preview?.audio === audio && stopPreview();
+    audio.play().catch(() => preview?.audio === audio && stopPreview());
+  };
+
   async function renderSounds({ onChanged, style = renderSounds.style || '' } = {}) {
     renderSounds.style = style;
+    stopPreview();
     const box = $('#adminSounds');
     const view = await api('admin/sounds');
     const set = view.styles.find(x => x.style === style) || view.styles[0];
@@ -422,11 +442,11 @@ export function createAccountUI({ api, show, onSignedIn, onShowLessons, onPrevie
       tabs.appendChild(b);
     }
     box.querySelector('.style-hint').textContent = set.hint || '';
-    const play = url => { const a = new Audio(url); a.play().catch(() => {}); return a; };
     const list = box.querySelector('.music-list');
     for (const m of set.music) {
       const card = document.createElement('div');
       card.className = 'music-card';
+      card.dataset.slot = m.slot;
       card.innerHTML = `<div class="row head"><b></b><span class="hint what"></span><span class="hint status"></span></div>
         <textarea rows="2"></textarea>
         <div class="row"><label class="secs">Seconds <input type="number" min="3" max="120" step="1"></label>
@@ -447,7 +467,7 @@ export function createAccountUI({ api, show, onSignedIn, onShowLessons, onPrevie
       const playBtn = card.querySelector('.play');
       playBtn.classList.toggle('hidden', !m.url && !m.fallback);
       if (!m.url && m.fallback) playBtn.textContent = '▶ Default';
-      playBtn.onclick = () => play(m.url || m.fallback);
+      playBtn.onclick = () => play(m.url || m.fallback, playBtn);
       card.querySelector('.remove').classList.toggle('hidden', !m.url);
       const make = card.querySelector('.make');
       make.textContent = m.url ? 'Make again' : 'Make';
@@ -460,7 +480,7 @@ export function createAccountUI({ api, show, onSignedIn, onShowLessons, onPrevie
           await onChanged?.();
           await renderSounds({ onChanged, style: set.style });
           const url = fresh.styles.find(x => x.style === set.style)?.music.find(x => x.slot === m.slot)?.url;
-          if (url) play(url);
+          if (url) play(url, $(`#adminSounds .music-card[data-slot="${m.slot}"] .play`));
         } catch (err) { msg.textContent = err.message; make.disabled = false; }
       };
       card.querySelector('.remove').onclick = async () => {
@@ -480,7 +500,7 @@ export function createAccountUI({ api, show, onSignedIn, onShowLessons, onPrevie
         <span class="hint n"></span><button type="button" class="ghost del" title="Delete (made again if a lesson needs it)">✕</button>`;
       r.querySelector('.t').textContent = `${e.kind === 'music' ? '🎵 ' : ''}${e.text}`;
       r.querySelector('.n').textContent = `${e.seconds}s · used ${e.uses || 1}×`;
-      r.querySelector('.play').onclick = () => play(e.url);
+      r.querySelector('.play').onclick = ev => play(e.url, ev.currentTarget);
       r.querySelector('.del').onclick = async () => { await api('admin/sounds?key=' + e.key, null, 'DELETE'); r.remove(); };
       fx.appendChild(r);
     }
@@ -613,5 +633,5 @@ export function createAccountUI({ api, show, onSignedIn, onShowLessons, onPrevie
     }
   }
 
-  return { showSetup, showPicker, askAdminPassword, renderUsers, renderPolicies, renderRefusals, renderHistory, renderVoices, renderBackends, renderSounds };
+  return { showSetup, showPicker, askAdminPassword, renderUsers, renderPolicies, renderRefusals, renderHistory, renderVoices, renderBackends, renderSounds, stopPreview };
 }
