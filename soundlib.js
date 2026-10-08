@@ -3,7 +3,7 @@
 //
 // Files live in lessons/_sounds/ with an index, library.json:
 //   { effects: { <key>: { text, seconds, file, uses, createdAt } },
-//     music:   { <slot>: { prompt, seconds, file, createdAt } } }
+//     music:   { <slot> | <style>:<slot>: { prompt, seconds, file, createdAt } } }
 // Effects are keyed by their normalized description and length, so the same words give the same file.
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -23,6 +23,34 @@ export const MUSIC_SLOTS = {
   perfect: { label: 'Perfect score', hint: 'All quiz answers right', seconds: 6,
     prompt: 'A short triumphant fanfare for a perfect score: joyful brass, timpani roll and a cymbal, ends with a big happy chord, no vocals' },
 };
+
+// A set of music per teaching style (the learner's pick, whatever the subject), each falling back to
+// the default set above, slot by slot. Prompts are the starting descriptions in Admin › Sounds; a style
+// has only the slots it lists (serious and matter-of-fact lessons have no jingles or quiz music).
+export const MUSIC_STYLES = {
+  '': { label: 'Default', hint: 'Lessons with no style, and any slot a style has no track for' },
+  serious: { label: 'Serious', prompts: {
+    waiting: 'Calm, thoughtful instrumental background music: solo piano and soft cello, slow and reflective, understated, steady with no big build-ups, no vocals',
+  } },
+  matter: { label: 'Matter of fact', prompts: {
+    waiting: 'Minimal, clean instrumental background music: soft electric piano and a light pulsing synth, neutral and focused, steady with no build-ups, no vocals',
+  } },
+  jovial: { label: 'Jovial', prompts: {
+    waiting: 'Warm, cheerful instrumental background music: acoustic guitar, ukulele, light piano and soft hand percussion, sunny and friendly, steady with no big build-ups, no vocals',
+    quiz: 'Upbeat friendly quiz background music: acoustic guitar strums, light handclaps and glockenspiel, bouncy but not distracting, steady, no vocals',
+    intro: 'A short warm, cheerful opening jingle: acoustic guitar, glockenspiel and handclaps, ends cleanly, no vocals',
+    celebrate: 'A short happy well-done jingle: acoustic guitar, glockenspiel and a bright flute, ends cleanly, no vocals',
+    perfect: 'A short joyful celebration: bright brass, handclaps and a big happy final chord, ends cleanly, no vocals',
+  } },
+  goofy: { label: 'Goofy', prompts: {
+    waiting: 'Silly, bouncy instrumental background music: tuba, bassoon, slide whistle and pizzicato strings, cartoonish and playful, steady with no big build-ups, no vocals',
+    quiz: 'Goofy cartoon quiz background music: bassoon, pizzicato strings, woodblock and springy boings, sneaky and comic, steady and not distracting, no vocals',
+    intro: 'A short goofy cartoon opening jingle: tuba, slide whistle and xylophone, comic, ends with a silly honk, no vocals',
+    celebrate: 'A short silly well-done jingle: comic brass, a xylophone run and a slide whistle, ends cleanly, no vocals',
+    perfect: 'A short over-the-top comic fanfare: brass, timpani, a cymbal crash and a slide-whistle flourish, ends with a big silly chord, no vocals',
+  } },
+};
+const musicKey = (style, slot) => (style ? `${style}:${slot}` : slot);
 
 // How much sound a lesson may ask for (extra ops are dropped when a part is saved).
 export const LIMITS = { effectsPerPart: 3, effectsPerAside: 2, musicPerLesson: 1, effectSeconds: [0.5, 10, 2], musicSeconds: [3, 10, 5] };
@@ -132,13 +160,18 @@ export function createSoundLibrary({ dir, backends, urlFor }) {
     },
 
     // ----- music for the gaps -----
+    // { <style>: { <slot>: url } } with only the tracks that exist; '' is the default set.
     musicUrls() {
-      return Object.fromEntries(Object.keys(MUSIC_SLOTS).map(s => [s, lib.music[s] && fs.existsSync(path.join(dir, lib.music[s].file)) ? urlFor(lib.music[s].file) : null]));
+      return Object.fromEntries(Object.keys(MUSIC_STYLES).map(style => [style, Object.fromEntries(Object.keys(MUSIC_SLOTS).flatMap(slot => {
+        const m = lib.music[musicKey(style, slot)];
+        return m && fs.existsSync(path.join(dir, m.file)) ? [[slot, urlFor(m.file)]] : [];
+      }))]));
     },
-    async makeMusic(slot, prompt, seconds) {
+    async makeMusic(slot, prompt, seconds, style = '') {
       const def = MUSIC_SLOTS[slot];
       if (!def) throw Object.assign(new Error('Unknown music slot'), { status: 400 });
-      prompt = norm(prompt) || def.prompt;
+      if (!MUSIC_STYLES[style] || (style && !MUSIC_STYLES[style].prompts[slot])) throw Object.assign(new Error('Unknown style'), { status: 400 });
+      prompt = norm(prompt) || MUSIC_STYLES[style].prompts?.[slot] || def.prompt;
       seconds = Math.round(Math.min(120, Math.max(3, +seconds || def.seconds)));
       // The admin asked for this directly: try even a backend that failed a moment ago, and don't take it
       // out of rotation if it fails now (the message says why).
@@ -151,19 +184,21 @@ export function createSoundLibrary({ dir, backends, urlFor }) {
         throw Object.assign(new Error(msg), { status: e.status >= 400 && e.status < 500 ? e.status : 502 });
       }
       backends.healthy(b) || backends.clearFailed?.(b);
-      const file = `music-${slot}-${Date.now().toString(36)}.${ext}`;
+      const key = musicKey(style, slot);
+      const file = `music-${style ? style + '-' : ''}${slot}-${Date.now().toString(36)}.${ext}`;
       await fsp.mkdir(dir, { recursive: true });
       await fsp.writeFile(path.join(dir, file), audio);
-      const old = lib.music[slot];
-      lib.music[slot] = { prompt, seconds, file, createdAt: new Date().toISOString() };
+      const old = lib.music[key];
+      lib.music[key] = { prompt, seconds, file, createdAt: new Date().toISOString() };
       await save();
       if (old?.file) fsp.unlink(path.join(dir, old.file)).catch(() => {});
-      console.log(`music made (${b.id}): ${slot} ${seconds}s`);
-      return lib.music[slot];
+      console.log(`music made (${b.id}): ${key} ${seconds}s`);
+      return lib.music[key];
     },
-    async removeMusic(slot) {
-      const old = lib.music[slot];
-      delete lib.music[slot];
+    async removeMusic(slot, style = '') {
+      const key = musicKey(style, slot);
+      const old = lib.music[key];
+      delete lib.music[key];
       await save();
       if (old?.file) fsp.unlink(path.join(dir, old.file)).catch(() => {});
     },
@@ -177,11 +212,14 @@ export function createSoundLibrary({ dir, backends, urlFor }) {
     // For Admin › Sounds.
     adminView() {
       return {
-        music: Object.entries(MUSIC_SLOTS).map(([slot, d]) => {
-          const m = lib.music[slot];
-          return { slot, label: d.label, hint: d.hint, defaultPrompt: d.prompt, defaultSeconds: d.seconds,
-            prompt: m?.prompt || null, seconds: m?.seconds || null, url: m ? urlFor(m.file) : null, createdAt: m?.createdAt || null };
-        }),
+        styles: Object.entries(MUSIC_STYLES).map(([style, st]) => ({ style, label: st.label, hint: st.hint || null,
+          music: Object.entries(MUSIC_SLOTS).filter(([slot]) => !st.prompts || st.prompts[slot]).map(([slot, d]) => {
+            const m = lib.music[musicKey(style, slot)];
+            return { slot, label: d.label, hint: d.hint, defaultPrompt: st.prompts?.[slot] || d.prompt, defaultSeconds: d.seconds,
+              prompt: m?.prompt || null, seconds: m?.seconds || null, url: m ? urlFor(m.file) : null, createdAt: m?.createdAt || null,
+              fallback: style && !m && lib.music[slot] ? urlFor(lib.music[slot].file) : null };
+          }),
+        })),
         effects: Object.entries(lib.effects).map(([key, e]) => ({ key, ...e, url: urlFor(e.file) }))
           .sort((a, b) => String(b.lastUsed || b.createdAt).localeCompare(String(a.lastUsed || a.createdAt))),
         backend: backends.jobs.sounds.map(b => b.describe()).join(' → ') || null,

@@ -135,7 +135,9 @@ See `PLAN.md` for status, decisions and roadmap.
   made once and cached by (kind, description, seconds). The board's `op_sound`/`op_music` emit to the
   player, which plays them through `<audio>` (pausable); late ones (>2.5 s) are skipped.
 - Music for the gaps (`MUSIC_SLOTS`: waiting, quiz, intro, celebrate, perfect): Admin › Sounds makes them
-  (`POST admin/music`); `GET config` gives `music: { slot: url|null }`; null → generative synth tune.
+  (`POST admin/music`). Each teaching style can have its own set (`MUSIC_STYLES`; serious/matter: waiting only),
+  chosen by the lesson's style whatever the subject; a missing track falls back to the default set, then to a
+  generative synth tune. `GET config` gives `music: { style: { slot: url } }` ('' = default); `musicFor()` in app.js.
   Loops are crossfaded. Music ducks while the teacher speaks (`sound.duck`); waiting music plays louder than the quiz's (`LOOP_LEVEL`).
 - `sounds` job: type `elevenlabs-sounds` (effects: `/v1/sound-generation`; music: `/v1/music`,
   instrumental). Older configs get it automatically when there's an ElevenLabs voice key (`addSoundsJob`).
@@ -185,7 +187,8 @@ See `PLAN.md` for status, decisions and roadmap.
   starts asking. Questions asked here play as asides, then it asks "any other questions?".
 - Tone of the reactions: the quiz is written with `reactions: { right[], wrong[] }` and `score: { perfect, good,
   low }` ({score}/{total} placeholders) in the lesson's voice, weighing style, age and the subject's gravity.
-  The outline's `playful` flag gates the intro jingle, quiz music, chimes and fanfares. Older lessons:
+  `playful()` gates the intro jingle, quiz music, chimes and fanfares: a chosen style decides (`TONE_PLAYFUL`: goofy
+  and jovial yes, serious and matter-of-fact no); with no style, the outline's `playful` flag. Older quizzes:
   `REACTIONS` in app.js, plain for the serious / matter-of-fact styles.
 - Quiz: `POST /api/quiz` (forked session, prefetched while the last part plays) → `lesson.quiz`;
   results → `lesson.quizResults` (last score shown in the library). Skippable.

@@ -277,10 +277,10 @@ export function createSound(getCtx) {
     // Background music for a gap: slot 'waiting' or 'quiz'; url from the library, or made up here.
     startMusic(slot, url) {
       if (!ready()) return;
-      if (bg?.slot === slot) return;
+      if (bg?.slot === slot && bg.url === url) return;
       bg?.stop();
       bg = url ? fileLoop(url, slot) : synthLoop(slot);
-      bg.slot = slot;
+      Object.assign(bg, { slot, url });
     },
     stopMusic() { bg?.stop(); bg = null; },
     // A short musical moment: 'intro' | 'celebrate' | 'perfect'.

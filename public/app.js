@@ -43,12 +43,13 @@ function applyName() {
 // Each step is generated separately, so loudness varies between them. Run playback through a
 // compressor + makeup gain to even it out. Created on first use (needs a user gesture).
 let audioCtx;
+let musicTone = ''; // the teaching style whose music plays: the lesson's, or the one picked for a new lesson
 // Marker sounds, effects and music (sound.js); shares the speech's audio context.
 const sound = createSound(() => (audioCtx ||= new AudioContext()));
 // The learner's volume, and whether the admin allows them sound at all.
 function applySound() {
   sound.configure({ volume: settings.volume ?? 0.8, allowed: me?.user?.sounds !== false });
-  if (sound.on) sound.preload(config.music?.waiting);
+  if (sound.on) sound.preload(musicFor('waiting', settings.tone));
 }
 function levelAudio(audio) {
   if (audio._leveled) return;
@@ -431,6 +432,7 @@ class Player {
   load(lesson) {
     this.stop();
     this.lesson = lesson;
+    musicTone = lesson.tone || '';
     this.pos = { section: 0, step: 0 };
     this.endRound = 0;
     this.titleShown = false;
@@ -505,7 +507,7 @@ class Player {
         hidePrep();
       }
       // A little jingle as the lesson begins.
-      if (section === 0 && this.pos.step === 0 && playful(l)) sound.sting('intro', config.music?.intro);
+      if (section === 0 && this.pos.step === 0 && playful(l)) sound.sting('intro', musicFor('intro'));
       if (this.titleShown) {
         this.titleShown = false;
         await this.board.run({ op: 'erase', target: ['_title', '_titleBy'] });
@@ -905,7 +907,7 @@ function showPrep(text, error, kind = 'lesson') {
   else if (wasHidden || kind !== showPrep.kind) startQuips(kind);
   showPrep.kind = kind;
   // Music while we wait (stops for an error).
-  if (error) sound.stopMusic(); else sound.startMusic('waiting', config.music?.waiting);
+  if (error) sound.stopMusic(); else sound.startMusic('waiting', musicFor('waiting'));
 }
 // Start card: shown when opening a saved lesson (a click also unlocks audio) or when the
 // browser blocked autoplay mid-lesson.
@@ -1045,9 +1047,12 @@ function loadQuiz(lesson) {
   return lesson.quizPending;
 }
 
-// Whether a lesson suits playful touches (jingles, chimes, fanfares, bouncy quiz music): the teacher
-// decides when planning; older lessons go by their style.
-const playful = l => l?.outline?.playful ?? !['serious', 'matter'].includes(l?.tone);
+// Whether a lesson suits playful touches (jingles, chimes, fanfares, bouncy quiz music): a chosen style
+// decides (goofy is goofy, whatever the subject); with no style, the teacher judged it when planning.
+const TONE_PLAYFUL = { serious: false, matter: false, jovial: true, goofy: true };
+const playful = l => TONE_PLAYFUL[l?.tone] ?? l?.outline?.playful ?? true;
+// A gap's music for a teaching style: that style's track, else the default one (none → a made-up tune).
+function musicFor(slot, tone = musicTone) { return config.music?.[tone || '']?.[slot] || config.music?.['']?.[slot] || null; }
 
 // How the teacher reacts in the quiz: written with the quiz in the lesson's voice; these are for older quizzes.
 const REACTIONS = {
@@ -1084,7 +1089,7 @@ async function startQuiz() {
   const box = $('#quiz');
   box.classList.remove('hidden');
   Object.assign(quiz, { i: 0, score: 0, answers: [], answered: false, active: true });
-  if (playful(l)) sound.startMusic('quiz', config.music?.quiz);
+  if (playful(l)) sound.startMusic('quiz', musicFor('quiz'));
   if (!l.quiz) {
     $('#quizQ').textContent = 'Writing your quiz…';
     $('#quizChoices').replaceChildren();
@@ -1162,7 +1167,7 @@ function endQuiz(skipped) {
   $('#quizQ').textContent = `You got ${quiz.score} out of ${total}!`;
   $('#quizChoices').replaceChildren();
   const pct = quiz.score / total;
-  if (playful(l)) sound.sting(pct === 1 ? 'perfect' : 'celebrate', config.music?.[pct === 1 ? 'perfect' : 'celebrate']);
+  if (playful(l)) sound.sting(pct === 1 ? 'perfect' : 'celebrate', musicFor(pct === 1 ? 'perfect' : 'celebrate'));
   const score = reactionsFor(l).score;
   const line = (pct === 1 ? score.perfect : pct >= 0.6 ? score.good : score.low).replaceAll('{score}', quiz.score).replaceAll('{total}', total);
   $('#quizExplain').textContent = stripCues(line);
@@ -1280,6 +1285,7 @@ async function startLesson(topic, minutes = +$('#lengths').dataset.chosen || set
   show('lesson');
   player.stop();
   player.board.reset();
+  musicTone = settings.tone;
   $('#lessonTitle').textContent = topic;
   $('#timeline').replaceChildren();
   $('#prepOutline').replaceChildren();

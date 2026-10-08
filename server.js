@@ -104,6 +104,10 @@ const TONES = {
   goofy: 'Goofy: playful and silly. Puns, absurd analogies, funny doodles on the board, comic timing (use the audio cues: [laughs], [gasps], [whispers], dramatic pauses), maybe a running gag. Still teach the material accurately and completely; the silliness is how you make it stick, not a replacement for substance.',
 };
 
+// Playful touches (jingles, chimes, fanfares, bouncy quiz music) follow a chosen style, whatever the
+// subject; with no style the teacher judges from the subject and the student when planning.
+const TONE_PLAYFUL = { serious: false, matter: false, jovial: true, goofy: true };
+
 function system_(teacher, tone, policy, profile = '', withSounds = false, withAsk = false) {
   return `You are ${teacher || 'Claude'}, a brilliant${TONES[tone] ? '' : ', warm'} teacher giving a live lesson at a whiteboard. You write lessons as scripts that a program performs: your words are spoken by a text-to-speech voice and your drawing is drawn live in sync. Be the teacher you'd most want to learn from: make it vivid, visual and genuinely interesting.
 ${TONES[tone] ? `\nYour teaching personality for this lesson, chosen by the student: ${TONES[tone]}\n` : ''}${policyPrompt(policy)}${profilePrompt(profile)}
@@ -546,11 +550,12 @@ const api = {
       mode: 'start', name: `Lesson: ${topic}`.slice(0, 80),
       prompt: `A student asked: "${topic}"
 Plan a ${minutes}-minute lesson${level ? ` for a ${level} audience` : ''}, split into ${n} part(s) that will each be written separately but played back to back as one continuous lesson, followed by a separate question time and quiz (about ${Math.round(minutes / n * 10) / 10} minutes of speech each). Shape the lesson however you think teaches it best.
-Also judge whether this lesson suits light, playful touches (a jingle as it starts, chimes and a fanfare in the quiz):
-yes for young students and light topics; no when the subject is serious, sad or mature, or the style is serious or matter of fact.
-Return: {"title":"<short lesson title>","playful":true|false,"sections":[{"title":"...","plan":"<what this part covers and how you intend to show it on the board>"}]}
+${TONE_PLAYFUL[tone] === undefined ? `Also judge whether this lesson suits light, playful touches (a jingle as it starts, chimes and a fanfare in the quiz):
+yes for young students and light topics; no when the subject is serious, sad or mature.
+` : ''}Return: {"title":"<short lesson title>",${TONE_PLAYFUL[tone] === undefined ? '"playful":true|false,' : ''}"sections":[{"title":"...","plan":"<what this part covers and how you intend to show it on the board>"}]}
 I'll then ask you for each part in turn.`,
     });
+    if (TONE_PLAYFUL[tone] !== undefined) outline.playful = TONE_PLAYFUL[tone];
     const id = `${new Date().toISOString().slice(0, 10)}-${slug(outline.title || topic)}-${crypto.randomBytes(2).toString('hex')}`;
     const lesson = {
       id, owner: ctx.user.id, convo, convoBackend: backend, topic, minutes, level, tone, teacher, model: model || null, sounds: withSounds, interactive,
@@ -831,7 +836,7 @@ Return: {"steps":[...]}`,
       listening: !!backends.first('listening'), // false → no mic buttons
       // When the first working listening backend runs in the browser: which model to run there.
       listenInBrowser: backends.first('listening')?.capabilities?.runsIn === 'browser' ? backends.first('listening').clientSpec() : null,
-      music: sounds.musicUrls(), // { slot: url | null }; null → the player makes up a tune
+      music: sounds.musicUrls(), // { style: { slot: url } } ('' = default); none → the player makes up a tune
     };
   },
 
@@ -849,12 +854,12 @@ Return: {"steps":[...]}`,
   async 'GET admin/sounds'() {
     return sounds.adminView();
   },
-  async 'POST admin/music'({ slot, prompt, seconds }) {
-    await sounds.makeMusic(slot, prompt, seconds);
+  async 'POST admin/music'({ slot, prompt, seconds, style }) {
+    await sounds.makeMusic(slot, prompt, seconds, style || '');
     return sounds.adminView();
   },
   async 'DELETE admin/music'(_, q) {
-    await sounds.removeMusic(q.get('slot'));
+    await sounds.removeMusic(q.get('slot'), q.get('style') || '');
     return sounds.adminView();
   },
   async 'DELETE admin/sounds'(_, q) {

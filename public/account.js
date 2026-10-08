@@ -397,19 +397,34 @@ export function createAccountUI({ api, show, onSignedIn, onShowLessons, onPrevie
 
   // ----- admin: sounds -----
   // The music for the gaps (made once, from a description) and the sound effects lessons have used.
-  async function renderSounds({ onChanged } = {}) {
+  async function renderSounds({ onChanged, style = renderSounds.style || '' } = {}) {
+    renderSounds.style = style;
     const box = $('#adminSounds');
     const view = await api('admin/sounds');
+    const set = view.styles.find(x => x.style === style) || view.styles[0];
     box.innerHTML = `<div class="admin-head"><h2>Sounds</h2></div>
       <p class="hint">${view.backend
         ? `Made by ${esc(view.backend)}. Music plays while waiting, during the quiz and at a few moments; until a track is made, the app makes up a simple tune.`
         : 'No sounds service is set up (Admin › Backends › Sounds), so there are no sound effects and the app makes up simple music.'}
         Learners can be switched off in People › Edit; each learner sets their own volume in Settings.</p>
-      <h3 class="sub">Music</h3><div class="music-list"></div>
+      <h3 class="sub">Music</h3>
+      <p class="hint">Each teaching style can have its own music, whatever the subject. A style without its own track uses the default one.
+        Serious and matter-of-fact lessons have no jingles or quiz music, so those styles only have waiting music.</p>
+      <div class="tabs music-styles"></div><p class="hint style-hint"></p><div class="music-list"></div>
       <h3 class="sub">Sound effects <span class="hint">(made when a lesson first uses them, then reused)</span></h3><div class="fx-list"></div>`;
+    const tabs = box.querySelector('.music-styles');
+    for (const st of view.styles) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = `${st.label} ${st.music.filter(m => m.url).length}/${st.music.length}`;
+      b.classList.toggle('on', st === set);
+      b.onclick = () => renderSounds({ onChanged, style: st.style });
+      tabs.appendChild(b);
+    }
+    box.querySelector('.style-hint').textContent = set.hint || '';
     const play = url => { const a = new Audio(url); a.play().catch(() => {}); return a; };
     const list = box.querySelector('.music-list');
-    for (const m of view.music) {
+    for (const m of set.music) {
       const card = document.createElement('div');
       card.className = 'music-card';
       card.innerHTML = `<div class="row head"><b></b><span class="hint what"></span><span class="hint status"></span></div>
@@ -421,16 +436,19 @@ export function createAccountUI({ api, show, onSignedIn, onShowLessons, onPrevie
           <span class="hint msg"></span></div>`;
       card.querySelector('b').textContent = m.label;
       card.querySelector('.what').textContent = m.hint;
-      card.querySelector('.status').textContent = m.url ? `made ${new Date(m.createdAt).toLocaleDateString()}` : 'not made yet: a made-up tune plays';
+      card.querySelector('.status').textContent = m.url ? `made ${new Date(m.createdAt).toLocaleDateString()}`
+        : set.style ? (m.fallback ? 'not made yet: the default track plays' : 'not made yet: a made-up tune plays') : 'not made yet: a made-up tune plays';
       const text = card.querySelector('textarea'), secs = card.querySelector('input');
       text.value = m.prompt || m.defaultPrompt;
       secs.value = m.seconds || m.defaultSeconds;
       const msg = card.querySelector('.msg');
       const cost = () => { msg.textContent = `about ${Math.round(+secs.value * 15)} credits`; };
       text.oninput = secs.oninput = cost;
-      card.querySelector('.play').classList.toggle('hidden', !m.url);
+      const playBtn = card.querySelector('.play');
+      playBtn.classList.toggle('hidden', !m.url && !m.fallback);
+      if (!m.url && m.fallback) playBtn.textContent = '▶ Default';
+      playBtn.onclick = () => play(m.url || m.fallback);
       card.querySelector('.remove').classList.toggle('hidden', !m.url);
-      card.querySelector('.play').onclick = () => play(m.url);
       const make = card.querySelector('.make');
       make.textContent = m.url ? 'Make again' : 'Make';
       make.disabled = !view.backend;
@@ -438,18 +456,18 @@ export function createAccountUI({ api, show, onSignedIn, onShowLessons, onPrevie
         make.disabled = true;
         msg.textContent = 'Making… (can take a minute)';
         try {
-          await api('admin/music', { slot: m.slot, prompt: text.value, seconds: +secs.value });
+          const fresh = await api('admin/music', { slot: m.slot, prompt: text.value, seconds: +secs.value, style: set.style });
           await onChanged?.();
-          await renderSounds({ onChanged });
-          const fresh = (await api('admin/sounds')).music.find(x => x.slot === m.slot);
-          if (fresh?.url) play(fresh.url);
+          await renderSounds({ onChanged, style: set.style });
+          const url = fresh.styles.find(x => x.style === set.style)?.music.find(x => x.slot === m.slot)?.url;
+          if (url) play(url);
         } catch (err) { msg.textContent = err.message; make.disabled = false; }
       };
       card.querySelector('.remove').onclick = async () => {
-        if (!confirm(`Remove the ${m.label} music? A made-up tune plays instead.`)) return;
-        await api('admin/music?slot=' + m.slot, null, 'DELETE');
+        if (!confirm(`Remove the ${set.label} ${m.label} music? ${set.style ? 'The default track' : 'A made-up tune'} plays instead.`)) return;
+        await api(`admin/music?slot=${m.slot}&style=${set.style}`, null, 'DELETE');
         await onChanged?.();
-        renderSounds({ onChanged });
+        renderSounds({ onChanged, style: set.style });
       };
       list.appendChild(card);
     }

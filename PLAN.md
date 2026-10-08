@@ -149,7 +149,8 @@ Needed before learning profiles: the app will move to the homelab and be used fr
    Limits: 3 effects a part, 2 an aside, 1 music accent a lesson (extras dropped on save).
 3. ✅ Music for the gaps: waiting (lesson/answer being written), quiz, lesson start, quiz done, perfect
    score. Admin › Sounds makes each from a prompt; until then a generative pentatonic tune / synth sting.
-   Music ducks under the teacher's voice.
+   Music ducks under the teacher's voice. A set per teaching style (goofy lesson → goofy music, whatever
+   the subject); the style also decides whether jingles and fanfares play at all.
 - Per learner: admin switch (People › Edit), learner volume (Settings).
 - Maybe later: a free sounds backend (e.g. a local text-to-audio model on the homelab).
 
